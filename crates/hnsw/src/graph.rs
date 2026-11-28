@@ -408,7 +408,7 @@ impl VectorMatrix {
 
     /// [`VectorMatrix::distance`], permitted to stop once it cannot clear `bound`.
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "the resolved arithmetic, the kernel, both endpoints with their norms and \
                   the bound are each an independent input of one distance"
@@ -450,7 +450,7 @@ impl VectorMatrix {
     ///
     /// `norms` is the index's per-row norm table: empty for a kernel that does not divide
     /// by one, one per row otherwise.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "the resolved arithmetic, the kernel, the seed with its norm, the norm \
                   table, the ids and the output are each an independent input of one batch"
@@ -489,7 +489,7 @@ impl VectorMatrix {
 
     /// The distances from an external `binary64` query to each row of `ids`, in `ids`
     /// order, by one call to the batch kernel.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "the resolved arithmetic, the kernel, the query with its norm, the norm \
                   table, the ids and the output are each an independent input of one batch"

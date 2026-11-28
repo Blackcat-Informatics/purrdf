@@ -97,7 +97,6 @@ macro_rules! execute_one_body {
 }
 
 /// Scalar-tier monolithic decode + execute.
-#[allow(clippy::too_many_lines)]
 pub(crate) fn decode_and_execute_sequences_scalar<'fse, B: BufferBackend>(
     section: &SequencesHeader,
     source: &[u8],

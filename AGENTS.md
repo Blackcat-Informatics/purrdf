@@ -258,9 +258,9 @@ refuses them on every edge.
   regenerate with `make metadata`.
 * **Dependency versions live in one place:** root `[workspace.dependencies]`.
   Members use `dep.workspace = true`.
-* **Lints are workspace-inherited** (clippy pedantic and nursery) and must be
-  warning-free. Fix the code; a justified `#[allow]` is tightly scoped and
-  carries a reason.
+* **Lints are workspace-inherited** (Clippy pedantic and nursery) and must be
+  warning-free. Fix the code. Use `#[expect(lint, reason = "...")]` only on the
+  smallest item that needs a justified exception.
 * **SPDX headers** on every source file: `MIT OR Apache-2.0 OR MulanPSL-2.0`
   (documentation may be `CC-BY-4.0`).
 * **`.deficiencies` is an emergency ledger, never an authorization.** Its

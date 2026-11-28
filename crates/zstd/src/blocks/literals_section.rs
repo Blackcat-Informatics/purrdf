@@ -20,12 +20,12 @@ pub(crate) struct LiteralsSection {
     /// - If this block is of type [LiteralsSectionType::Raw], then the data is `regenerated_bytes`
     ///   bytes long, and it contains the raw literals data to be used during the second section,
     ///   the sequences section.
-    /// - If this block is of type [LiteralsSectionType::RLE],
+    /// - If this block is of type [LiteralsSectionType::Rle],
     ///   then the literal consists of a single byte repeated `regenerated_size` times.
     /// - For types [LiteralsSectionType::Compressed] or [LiteralsSectionType::Treeless],
     ///   then this is the size of the decompressed data.
     pub regenerated_size: u32,
-    /// - For types [LiteralsSectionType::Raw] and [LiteralsSectionType::RLE], this value is not present.
+    /// - For types [LiteralsSectionType::Raw] and [LiteralsSectionType::Rle], this value is not present.
     /// - For types [LiteralsSectionType::Compressed] and [LiteralsSectionType::Treeless], this value will
     ///   be set to the size of the compressed data.
     pub compressed_size: Option<u32>,
@@ -42,8 +42,7 @@ pub(crate) enum LiteralsSectionType {
     /// Literals are stored uncompressed.
     Raw,
     /// Literals consist of a single byte value repeated [LiteralsSection::regenerated_size] times.
-    #[allow(clippy::upper_case_acronyms)]
-    RLE,
+    Rle,
     /// This is a standard Huffman-compressed block, starting with a Huffman tree description.
     /// In this mode, there are at least *2* different literals represented in the Huffman tree
     /// description.
@@ -76,7 +75,7 @@ impl LiteralsSection {
         let ls_type: LiteralsSectionType = Self::section_type(first_byte)?;
         let size_format = (first_byte >> 2) & 0x3;
         match ls_type {
-            LiteralsSectionType::RLE | LiteralsSectionType::Raw => {
+            LiteralsSectionType::Rle | LiteralsSectionType::Raw => {
                 match size_format {
                     0 | 2 => {
                         // size_format actually only uses one bit
@@ -141,7 +140,7 @@ impl LiteralsSection {
         }
 
         match self.ls_type {
-            LiteralsSectionType::RLE | LiteralsSectionType::Raw => {
+            LiteralsSectionType::Rle | LiteralsSectionType::Raw => {
                 self.compressed_size = None;
                 match size_format {
                     0 | 2 => {
@@ -239,7 +238,7 @@ impl LiteralsSection {
         let t = raw & 0x3;
         match t {
             0 => Ok(LiteralsSectionType::Raw),
-            1 => Ok(LiteralsSectionType::RLE),
+            1 => Ok(LiteralsSectionType::Rle),
             2 => Ok(LiteralsSectionType::Compressed),
             3 => Ok(LiteralsSectionType::Treeless),
             other => Err(LiteralsSectionParseError::IllegalLiteralSectionType { got: other }),

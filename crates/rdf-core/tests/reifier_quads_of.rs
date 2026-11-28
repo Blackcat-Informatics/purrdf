@@ -22,6 +22,10 @@
 //! the frozen sort order nor the id order, so the runs are contiguous because of the
 //! freeze sort, not by accident of push order.
 
+#[expect(
+    dead_code,
+    reason = "this test compares term values rather than complete view rows"
+)]
 #[path = "support/values.rs"]
 mod values;
 use purrdf_core::term_fixture::iri;

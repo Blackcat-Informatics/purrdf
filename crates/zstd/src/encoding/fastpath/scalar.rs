@@ -16,10 +16,6 @@
 //! No `#[target_feature]` attributes here: every function uses portable Rust
 //! and must compile on any supported target.
 
-#![allow(dead_code)]
-
-pub(crate) const KERNEL_TAG: &str = "scalar";
-
 /// Position of the first mismatching byte inside an 8-byte XOR diff. On
 /// little-endian targets the low byte corresponds to the lowest address, so
 /// `trailing_zeros / 8` is the index of the first non-equal byte.
@@ -122,6 +118,12 @@ pub(crate) unsafe fn count_match_from_indices(
 /// # Safety
 /// Both pointers are readable for `max` bytes. The selected vector callback
 /// upholds its ISA contract and returns the equal prefix it consumed.
+#[cfg(any(
+    target_arch = "x86",
+    target_arch = "x86_64",
+    all(target_arch = "aarch64", target_endian = "little"),
+    all(target_arch = "wasm32", target_feature = "simd128")
+))]
 #[inline(always)]
 pub(crate) unsafe fn common_prefix_len_with(
     lhs: *const u8,

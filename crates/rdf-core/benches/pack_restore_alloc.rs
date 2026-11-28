@@ -1,10 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// This bench is a plain `main`, but the workspace `missing_docs` lint applies to its
-// items just the same; the reporting helpers below are internal probes, not API.
-#![allow(missing_docs)]
-
 //! Allocation evidence for the pack RESTORE path, phase by phase.
 //!
 //! **Report-only. No figure here is asserted, compared against a baseline, or gated

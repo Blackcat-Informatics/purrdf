@@ -7,11 +7,12 @@ use std::time::Duration;
 
 use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_main, black_box};
 
-#[allow(
+#[expect(
     dead_code,
     unused_imports,
     unused_macros,
-    reason = "each target uses part of the crate's shared JSON model"
+    unused_macro_rules,
+    reason = "this standalone target uses only part of the crate's shared JSON model"
 )]
 #[path = "../src/json_model.rs"]
 mod json_model;

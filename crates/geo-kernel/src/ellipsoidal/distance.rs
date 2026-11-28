@@ -1122,7 +1122,10 @@ fn push(
     })
 }
 
-#[allow(clippy::too_many_arguments)] // Complete global box operands and borrowed admission remain explicit.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "complete global box operands and borrowed admission remain explicit"
+)]
 fn sample(
     prepared: &PreparedGeodesic,
     aa: &[Primitive<'_>],

@@ -7,7 +7,10 @@
 
 // The module is included into more than one integration-test binary, and no single binary
 // uses every helper; an unused-here helper is used there.
-#![allow(dead_code, unreachable_pub)]
+#![expect(
+    dead_code,
+    reason = "each test or benchmark includes a different subset of this shared fixture"
+)]
 
 use std::sync::Arc;
 
@@ -20,7 +23,7 @@ use purrdf_shapes::report::ValidationReport;
 /// The report's RDF form is the comparison surface rather than a field-by-field
 /// walk: two restores are equal exactly when the graphs they produce are the same
 /// bytes.
-pub fn report_nt(prepared: &PreparedShapes, data: &Arc<RdfDataset>) -> String {
+pub(crate) fn report_nt(prepared: &PreparedShapes, data: &Arc<RdfDataset>) -> String {
     prepared
         .bind_shared_dataset(Arc::clone(data))
         .expect("binding the data graph")
@@ -31,7 +34,7 @@ pub fn report_nt(prepared: &PreparedShapes, data: &Arc<RdfDataset>) -> String {
 }
 
 /// Every result's focus node, rendered, sorted (duplicates kept).
-pub fn focus_nodes(report: &ValidationReport) -> Vec<String> {
+pub(crate) fn focus_nodes(report: &ValidationReport) -> Vec<String> {
     let mut nodes: Vec<String> = report
         .results
         .iter()
@@ -42,7 +45,7 @@ pub fn focus_nodes(report: &ValidationReport) -> Vec<String> {
 }
 
 /// `base` with `derived` pushed after it, frozen into one dataset.
-pub fn merge(base: &RdfDataset, derived: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
+pub(crate) fn merge(base: &RdfDataset, derived: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
     let mut builder = RdfDatasetBuilder::new();
     builder.push_dataset(base).unwrap();
     builder.push_dataset(derived).unwrap();

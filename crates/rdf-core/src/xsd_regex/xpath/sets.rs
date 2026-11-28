@@ -1450,7 +1450,6 @@ impl Sets {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines)]
     fn process(
         &mut self,
         ctx: &mut Ctx<'_>,

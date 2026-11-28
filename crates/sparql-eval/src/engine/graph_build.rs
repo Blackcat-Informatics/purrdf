@@ -130,10 +130,6 @@ impl NativeSparqlEngine {
     /// # Errors
     /// Returns the typed governor trip or ordinary query failure. The destination
     /// is untouched on either path.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "mirrors the prepared operation entry with an explicit publication destination"
-    )]
     #[expect(
         clippy::result_large_err,
         reason = "Typed budget refusal stays inline so reporting does not allocate after admission fails"
@@ -171,8 +167,7 @@ impl NativeSparqlEngine {
     /// # Errors
     /// Returns the existing typed fallible-query error with shared-governor and
     /// dataset evidence; no error publishes any part of the graph.
-    #[allow(
-        clippy::too_many_arguments,
+    #[expect(
         clippy::result_large_err,
         reason = "retains the existing fallible operation contract and adds its destination"
     )]
@@ -306,7 +301,7 @@ impl NativeSparqlEngine {
         })
     }
 
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "the shared staging body borrows its publication destination to choose fresh minted blank identities after admission"
     )]
@@ -356,7 +351,7 @@ impl NativeSparqlEngine {
     /// Stage the complete graph under the caller's admitted guard. This body
     /// reads destination identities but leaves append and its final checkpoint
     /// to the ingress, so a failed run cannot modify the destination.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "the one staging body keeps its destination, governor and sequencing under the admitted guard"
     )]

@@ -195,7 +195,6 @@ impl FSETable {
         State {
             num_bits: nb_bits as u8,
             baseline,
-            last_index: baseline + mask,
             index: next_index,
         }
     }
@@ -220,7 +219,6 @@ impl FSETable {
         State {
             num_bits: 0,
             baseline: 0,
-            last_index: 0,
             index,
         }
     }
@@ -347,14 +345,6 @@ pub(crate) struct State {
     pub(crate) num_bits: u8,
     /// The first index targeted by this state
     pub(crate) baseline: usize,
-    /// The last index targeted by this state (baseline + the maximum
-    /// number with numbits bits allows). Computed by
-    /// [`FSETable::next_state`] for parity with the old
-    /// `Vec<State>` storage and consumed by the BTreeSet dedup in the
-    /// table builder (`build_table_from_probabilities`); not read on
-    /// the encode hot path, which uses constant-time arithmetic.
-    #[allow(dead_code)]
-    pub(crate) last_index: usize,
     /// Index of this state in the decoding table
     pub(crate) index: usize,
 }
@@ -793,6 +783,10 @@ pub(super) fn build_table_from_probabilities(probs: &[i32], acc_log: u8) -> FSET
     // Phase 2 — spread positive-probability symbols across the
     // remaining slots, upstream zstd `step`-walk with low-prob area skip.
     let step = (table_size >> 1) + (table_size >> 3) + 3;
+    assert!(
+        !step.is_multiple_of(2),
+        "FSE spread must traverse the power-of-two table"
+    );
     let table_mask = table_size - 1;
     let mut position: usize = 0;
     for (symbol, &prob) in probs.iter().enumerate() {
@@ -834,26 +828,7 @@ pub(super) fn build_table_from_probabilities(probs: &[i32], acc_log: u8) -> FSET
     // Both representations encode the same `(symbol → next_slot)`
     // mapping; [`FSETable::next_state`] is written against the raw-slot
     // convention so the pre-shift is intentionally skipped here.
-    // Every index in `[0, table_size)` is written EXACTLY once by the scatter
-    // loop below: the `cumul` cursors partition the table bijectively, which the
-    // two asserts above enforce in every build profile. So a zero-init is dead
-    // -- every slot is overwritten before any read (`into_boxed_slice` +
-    // `FSETable` use happen after the loop). Allocate uninitialized and let the
-    // loop fill it, skipping a per-build `table_size`-element memset (3 FSE
-    // builds per block for the LL/ML/OF streams when custom tables are chosen).
-    // The `uninit_vec` lint cannot see the bijective full-write; soundness is
-    // confirmed under miri (the FSE encoder round-trip exercises this with no
-    // use-of-uninit).
-    #[allow(clippy::uninit_vec)]
-    let mut state_table_flat: Vec<u16> = {
-        let mut v = Vec::with_capacity(table_size);
-        // SAFETY: `with_capacity(table_size)` reserved exactly `table_size`
-        // slots; the asserts above guarantee (in every build profile) that the
-        // scatter loop below writes every index in `[0, table_size)` exactly
-        // once before the first read.
-        unsafe { v.set_len(table_size) };
-        v
-    };
+    let mut state_table_flat = alloc::boxed::Box::<[u16]>::new_uninit_slice(table_size);
     let mut cursor = cumul;
     for (u, &symbol_at_slot) in table_symbol.iter().enumerate() {
         let s = symbol_at_slot as usize;
@@ -861,10 +836,14 @@ pub(super) fn build_table_from_probabilities(probs: &[i32], acc_log: u8) -> FSET
         // raw slot (`0..table_size`); upstream zstd stores `table_size + u`
         // and subtracts on read. `next_state` arithmetic ([`FSETable::next_state`])
         // matches the Rust convention — store the slot directly.
-        state_table_flat[cursor[s] as usize] = u as u16;
+        state_table_flat[cursor[s] as usize].write(u as u16);
         cursor[s] += 1;
     }
-    let state_table_flat: alloc::boxed::Box<[u16]> = state_table_flat.into_boxed_slice();
+    // SAFETY: the odd step visits a full cycle modulo the power-of-two table.
+    // Skipping the slots already assigned to low-probability symbols leaves one
+    // visit per remaining slot. Each symbol therefore occurs exactly as often
+    // as its count in `cumul`, whose disjoint runs span the full table.
+    let state_table_flat = unsafe { state_table_flat.assume_init() };
 
     // Phase 4 — `symbolTT[]` (delta_nb_bits, delta_find_state) plus
     // precomputed `start_state` and `max_num_bits` per symbol. All via

@@ -461,7 +461,6 @@ impl PreparedGeodesic {
         )
     }
 
-    #[allow(clippy::too_many_arguments)] // Exact endpoints, worker/observer and separate arithmetic/proof goals.
     fn compute_inverse_goal(
         &self,
         a: &LonLat,
@@ -623,7 +622,10 @@ impl PreparedGeodesic {
 ///
 /// # Errors
 /// Refuses operational exhaustion and unresolved exact branch/rounding decisions.
-#[allow(clippy::needless_pass_by_value)] // Owned convenience surface; preparation borrows.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "owned convenience surface; preparation borrows"
+)]
 pub fn inverse(a: LonLat, b: LonLat) -> Result<InverseResult, GeoError> {
     let mut context = MetricContext::wgs84()?;
     PreparedGeodesic::new(context.reference().clone()).inverse(&a, &b, &mut context)
@@ -707,7 +709,10 @@ fn quantize(
     Ok(Rat::from_decimal(carrier_integer(&lower), places))
 }
 
-#[allow(clippy::too_many_arguments)] // Solver state, declared reference and numerical capabilities.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "solver state, declared reference and numerical capabilities"
+)]
 pub(super) fn candidate_solution<I: CertifiedInterval>(
     distance: I,
     candidate: &Hybrid<I>,
@@ -752,7 +757,10 @@ pub(super) fn candidate_solution<I: CertifiedInterval>(
     }
 }
 
-#[allow(clippy::too_many_arguments)] // Special exact branch and the shared numerical capabilities.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "special exact branch and the shared numerical capabilities"
+)]
 pub(super) fn special_solution<I: CertifiedInterval>(
     distance: I,
     pair: &CanonicalPair,
@@ -886,7 +894,10 @@ pub(super) fn equatorial_solution<I: CertifiedInterval>(
     })
 }
 
-#[allow(clippy::too_many_arguments)] // One branch state, exact symmetries and arithmetic capability.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one branch state, exact symmetries and arithmetic capability"
+)]
 fn metadata<I: CertifiedInterval>(
     arc: &AuxiliaryArc<I>,
     pair: &CanonicalPair,

@@ -1081,6 +1081,10 @@ impl FrameDecoder {
     /// The Strategy influences how many blocks will be decoded before the function returns
     /// This is important if you want to manage memory consumption carefully. If you don't care
     /// about that you can just choose the strategy "All" and have all blocks of the frame decoded into the buffer
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "changing the public decoder's owned strategy would break its signature"
+    )]
     pub fn decode_blocks(
         &mut self,
         mut source: impl Read,

@@ -65,172 +65,15 @@ use super::opt::types::MatchCandidate;
 // detect once per process via a `OnceLock`.
 use super::fastpath::FastpathKernel;
 
-/// Compile-time row tag-match kernel. Each ZST monomorphises the per-row
-/// tag compare so the search hot loop drops the runtime `RowTagKernel`
-/// enum branch (one predictable branch + all-tiers' inlined SIMD bodies
-/// per position become a single tier's body, no branch). The bare
-/// dispatchers select the impl once per block from the runtime-detected
-/// `tag_kernel`, so an impl is only instantiated/used on a CPU that
-/// supports its ISA — the same contract `RowTagKernel::detect` upholds for
-/// the enum's `unsafe` SIMD calls.
-pub(crate) trait RowTags: Copy {
-    /// Run the row match probe (live row + dict dual-probe) for this kernel.
-    /// Forwards to the matcher's per-tier `#[target_feature]` probe method whose
-    /// body expands the tier's `row_tag_mask_*!` SIMD inline (no function call),
-    /// so the vector tag-match inlines straight-line under the kernel's feature
-    /// umbrella instead of crossing the `#[target_feature]` ABI boundary on every
-    /// probe (which it does even for baseline NEON/SSE2 — see `fastpath` module
-    /// docs). Runtime kernel selection happens once at the `dispatch_tag_kernel!`
-    /// site, never inside the per-position hot loop.
-    ///
-    /// # Safety
-    /// The caller (via `dispatch_tag_kernel!`) only selects a kernel whose ISA
-    /// `RowTagKernel::detect` confirmed present, upholding the per-tier
-    /// `#[target_feature]` contract.
-    unsafe fn probe<const ROW_LOG: usize>(
-        matcher: &RowMatchGenerator,
-        abs_pos: usize,
-        lit_len: usize,
-        hash: Option<(usize, u8)>,
-    ) -> Option<MatchCandidate>;
-}
-
-// On wasm32+simd128 the row tier is the compile-time `Simd128Tags`, so the
-// scalar fallback ZST is never constructed there (it stays the fallback on
-// every other target, and on scalar-only wasm builds).
-
-#[cfg_attr(
-    all(target_arch = "wasm32", target_feature = "simd128"),
-    allow(dead_code)
-)]
-#[derive(Copy, Clone)]
-struct ScalarTags;
-impl RowTags for ScalarTags {
-    #[inline]
-    unsafe fn probe<const ROW_LOG: usize>(
-        matcher: &RowMatchGenerator,
-        abs_pos: usize,
-        lit_len: usize,
-        hash: Option<(usize, u8)>,
-    ) -> Option<MatchCandidate> {
-        // Scalar has no target feature; the probe body runs as-is.
-        unsafe { matcher.row_probe_scalar::<ROW_LOG>(abs_pos, lit_len, hash) }
-    }
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[derive(Copy, Clone)]
-struct Sse42Tags;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-impl RowTags for Sse42Tags {
-    #[inline]
-    unsafe fn probe<const ROW_LOG: usize>(
-        matcher: &RowMatchGenerator,
-        abs_pos: usize,
-        lit_len: usize,
-        hash: Option<(usize, u8)>,
-    ) -> Option<MatchCandidate> {
-        // SAFETY: dispatched only when `tag_kernel == Sse42` (SSE4.2 confirmed).
-        unsafe { matcher.row_probe_sse42::<ROW_LOG>(abs_pos, lit_len, hash) }
-    }
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[derive(Copy, Clone)]
-struct Avx2Bmi2Tags;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-impl RowTags for Avx2Bmi2Tags {
-    #[inline]
-    unsafe fn probe<const ROW_LOG: usize>(
-        matcher: &RowMatchGenerator,
-        abs_pos: usize,
-        lit_len: usize,
-        hash: Option<(usize, u8)>,
-    ) -> Option<MatchCandidate> {
-        // SAFETY: dispatched only when `tag_kernel == Avx2Bmi2` (AVX2+BMI2 confirmed).
-        unsafe { matcher.row_probe_avx2bmi2::<ROW_LOG>(abs_pos, lit_len, hash) }
-    }
-}
-
-#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-#[derive(Copy, Clone)]
-struct NeonTags;
-#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-impl RowTags for NeonTags {
-    #[inline]
-    unsafe fn probe<const ROW_LOG: usize>(
-        matcher: &RowMatchGenerator,
-        abs_pos: usize,
-        lit_len: usize,
-        hash: Option<(usize, u8)>,
-    ) -> Option<MatchCandidate> {
-        // SAFETY: dispatched only when `tag_kernel == Neon` (NEON confirmed).
-        unsafe { matcher.row_probe_neon::<ROW_LOG>(abs_pos, lit_len, hash) }
-    }
-}
-
-// WebAssembly fixed-128-bit SIMD tier. wasm has no runtime CPUID, so this is
-// compile-time only: present (and dispatched-to) exactly when the build enables
-// `simd128`, selected directly in `dispatch_tag_kernel!` rather than via the
-// runtime `FastpathKernel` (which carries no wasm tier).
-#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
-#[derive(Copy, Clone)]
-struct Simd128Tags;
-#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
-impl RowTags for Simd128Tags {
-    #[inline]
-    unsafe fn probe<const ROW_LOG: usize>(
-        matcher: &RowMatchGenerator,
-        abs_pos: usize,
-        lit_len: usize,
-        hash: Option<(usize, u8)>,
-    ) -> Option<MatchCandidate> {
-        // wasm simd128 is compile-time; `row_probe_simd128` needs no
-        // `#[target_feature]` and the intrinsics inline directly.
-        unsafe { matcher.row_probe_simd128::<ROW_LOG>(abs_pos, lit_len, hash) }
-    }
-}
-
-/// Resolve the runtime `tag_kernel` (`FastpathKernel`) to a `RowTags` ZST once,
-/// then call a `*_k::<K>` method that binds the `row_log` const. The kernel
-/// branch runs once per block (cold), so the per-position hot loop is fully
-/// monomorphised over the selected tier — no runtime kernel enum inside.
-macro_rules! dispatch_tag_kernel {
-    ($self:ident . $k_method:ident ( $($arg:expr),* )) => {{
-        // wasm32 has no runtime CPUID: when the build enables `simd128`, the
-        // tier is resolved at compile time straight to `Simd128Tags`, so the
-        // runtime `FastpathKernel` match (native-only) is cfg'd out entirely.
-        #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
-        {
-            $self.$k_method::<Simd128Tags>($($arg),*)
-        }
-        #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
-        {
-            match $self.tag_kernel {
-                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-                FastpathKernel::Avx2Bmi2 => $self.$k_method::<Avx2Bmi2Tags>($($arg),*),
-                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-                FastpathKernel::Sse42 => $self.$k_method::<Sse42Tags>($($arg),*),
-                #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-                FastpathKernel::Neon => $self.$k_method::<NeonTags>($($arg),*),
-                FastpathKernel::Scalar => $self.$k_method::<ScalarTags>($($arg),*),
-            }
-        }
-    }};
-}
-
 /// Per-tier `#[target_feature]` umbrella over the greedy row kernel: with
-/// the umbrella's features a superset of the tier probe's, the
-/// `#[inline(always)]` loop body AND the tier's `row_probe_*` merge into ONE
-/// compiled function (upstream zstd `ZSTD_compressBlock_greedy_row` shape) instead
-/// of paying a non-inlinable `#[target_feature]` call per position.
+/// the matching parse and probe share one compiled function if the feature
+/// scope covers both.
 /// The greedy row parse BODY as a macro: expanded per tier with the tier's
 /// own SIMD pairing (`$maskmac` tag-match + `$cpl` prefix kernel), with the
 /// probe body expanded inline at the search site — the full upstream zstd
 /// `ZSTD_compressBlock_greedy_row` monolith, one compiled function per tier.
 macro_rules! greedy_parse_body {
     ($m:expr, $handle:expr, $rl:expr, $use_mask:literal, $maskmac:ident, $cpl:path) => {{
-        #[allow(unused_labels)]
         'parse: {
             debug_assert_eq!($rl, $m.row_log);
             $m.ensure_tables();
@@ -473,7 +316,6 @@ macro_rules! row_best_match {
 /// the whole per-position pipeline one monolith with no per-position call cost.
 macro_rules! lazy_parse_body {
     ($m:expr, $handle:expr, $rl:expr, $use_mask:literal, $maskmac:ident, $cpl:path) => {{
-        #[allow(unused_labels)]
         'parse: {
             debug_assert_eq!($rl, $m.row_log);
             $m.ensure_tables();
@@ -644,12 +486,7 @@ macro_rules! lazy_parse_body {
 macro_rules! gen_lazy_monolith {
     ($name:ident, $use_mask:literal, $maskmac:ident, $cpl:path $(, $tf:literal)?) => {
         $(#[target_feature(enable = $tf)])?
-        // wasm32+simd128 resolves the dispatch at compile time to the
-        // simd128 kernel, leaving the scalar monolith uncalled there
-        // (same shape as the `ScalarTags` allowance).
-        #[cfg_attr(all(target_arch = "wasm32", target_feature = "simd128"), allow(dead_code))]
-        #[allow(unused_unsafe)]
-        unsafe fn $name<K: RowTags, const ROW_LOG: usize>(
+        unsafe fn $name<const ROW_LOG: usize>(
             &mut self,
             mut handle_sequence: impl for<'a> FnMut(Sequence<'a>),
         ) {
@@ -659,17 +496,11 @@ macro_rules! gen_lazy_monolith {
 }
 
 /// Per-tier greedy kernels: the parse body AND its probe expand inline under
-/// the tier's `#[target_feature]` umbrella with the tier's own SIMD pairing
-/// (the `K` parameter is kept only so the dispatch site stays uniform).
+/// the tier's `#[target_feature]` umbrella with the tier's own SIMD pairing.
 macro_rules! gen_greedy_monolith {
     ($name:ident, $use_mask:literal, $maskmac:ident, $cpl:path $(, $tf:literal)?) => {
         $(#[target_feature(enable = $tf)])?
-        // wasm32+simd128 resolves the dispatch at compile time to the
-        // simd128 kernel, leaving the scalar monolith uncalled there
-        // (same shape as the `ScalarTags` allowance).
-        #[cfg_attr(all(target_arch = "wasm32", target_feature = "simd128"), allow(dead_code))]
-        #[allow(unused_unsafe)]
-        unsafe fn $name<K: RowTags, const ROW_LOG: usize>(
+        unsafe fn $name<const ROW_LOG: usize>(
             &mut self,
             mut handle_sequence: impl for<'a> FnMut(Sequence<'a>),
         ) {
@@ -679,14 +510,14 @@ macro_rules! gen_greedy_monolith {
 }
 
 /// Bind the runtime `row_log` (clamped 4..=6) to the const `ROW_LOG` of a
-/// `*_rl::<K, ROW_LOG>` hot loop. Mirrors the upstream zstd's per-rowLog variant
+/// tier's hot loop. Mirrors the upstream zstd's per-rowLog variant
 /// table; the branch is cold (once per block / call).
 macro_rules! dispatch_row_log {
-    ($self:ident . $rl_method:ident :: <$k:ty> ( $($arg:expr),* )) => {
+    ($self:ident . $rl_method:ident ( $($arg:expr),* )) => {
         match $self.row_log {
-            4 => $self.$rl_method::<$k, 4>($($arg),*),
-            5 => $self.$rl_method::<$k, 5>($($arg),*),
-            6 => $self.$rl_method::<$k, 6>($($arg),*),
+            4 => $self.$rl_method::<4>($($arg),*),
+            5 => $self.$rl_method::<5>($($arg),*),
+            6 => $self.$rl_method::<6>($($arg),*),
             _ => unreachable!("row_log is clamped to 4..=6 in configure()"),
         }
     };
@@ -702,6 +533,7 @@ macro_rules! dispatch_row_log {
 /// Each expands to a `u64` bitmask: bit `j` set iff `tags[j] == tag`. The
 /// `row_tag_match_mask_*` wrapper fns below reuse these macros so the
 /// bit-identity tests exercise the exact same code the hot path runs.
+#[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
 macro_rules! row_tag_mask_scalar {
     ($tags:expr, $tag:expr) => {{
         let tags: &[u8] = $tags;
@@ -836,29 +668,12 @@ macro_rules! row_tag_mask_simd128 {
     }};
 }
 
-/// Emit a per-kernel row match probe method on `RowMatchGenerator`. The body is
-/// written ONCE here and stamped per tier under that tier's `#[target_feature]`
-/// umbrella; the tag-match SIMD is expanded inline via the `$maskmac` macro (not
-/// a function call), so the vector compare inlines straight-line — no
-/// `#[target_feature]` ABI boundary on the per-probe hot path. Runtime kernel
-/// selection happens once at the `dispatch_tag_kernel!` site; this method is the
-/// per-tier monomorphised hot loop with no kernel branch inside it.
-///
-/// `$use_mask` is the compile-time bitmask-vs-byte-compare choice; `$maskmac` is
-/// the tier's `row_tag_mask_*!`; the optional `$tf` is the `target_feature`.
-/// Mirrors the former generic `row_candidate_rl`: live row probe, dict
-/// dual-probe, speculative tail gate.
-/// The row probe BODY as a macro, expanded both into the per-tier
-/// `row_probe_*` functions (non-kernel callers) and directly into the
-/// per-tier parse kernels (`greedy_*` / `lazy_*`) where a function-call
-/// boundary — non-inlinable across `#[target_feature]` without an
-/// `inline(always)` the compiler forbids there — cost a call with operand
-/// spills per position. Early exits use the labeled block (`break 'probe`)
-/// because a `return` inside a macro body would return from the EXPANSION
-/// SITE's function.
+/// Search the live row and the dictionary row inside each parse kernel's
+/// target-feature scope. The mask and prefix comparison expand in that scope,
+/// without a kernel dispatch or target-feature call at each position.
+/// A labeled block exits the probe without returning from the parse kernel.
 macro_rules! row_probe_body {
     ($m:expr, $abs_pos:expr, $lit_len:expr, $hash:expr, $seed:expr, $rl:expr, $use_mask:literal, $maskmac:ident, $cpl:path) => {{
-        #[allow(unused_labels)]
         'probe: {
             debug_assert_eq!($rl, $m.row_log);
             let mls = $m.mls;
@@ -934,7 +749,6 @@ macro_rules! row_probe_body {
             } else {
                 (1u64 << row_entries) - 1
             };
-            #[allow(unused_mut)]
             let mut pending: u64 = if $use_mask {
                 let m = tag_match & entries_bits;
                 if head == 0 {
@@ -945,7 +759,6 @@ macro_rules! row_probe_body {
             } else {
                 0
             };
-            #[allow(unused_mut)]
             let mut scan = 0usize;
             let mut attempts = 0usize;
             while attempts < max_walk {
@@ -1066,7 +879,6 @@ macro_rules! row_probe_body {
                     0
                 };
                 // Same upstream zstd mask iteration as the live row above.
-                #[allow(unused_mut)]
                 let mut dpending: u64 = if $use_mask {
                     let m = dtag_match & entries_bits;
                     if dhead == 0 {
@@ -1077,7 +889,6 @@ macro_rules! row_probe_body {
                 } else {
                     0
                 };
-                #[allow(unused_mut)]
                 let mut dscan = 0usize;
                 let mut dattempts = 0usize;
                 while dattempts < dict_walk {
@@ -1151,37 +962,6 @@ macro_rules! row_probe_body {
     }};
 }
 
-macro_rules! gen_row_probe {
-    ($name:ident, $use_mask:literal, $maskmac:ident, $cpl:path $(, $tf:literal)?) => {
-        $(#[target_feature(enable = $tf)])?
-        // `#[inline]` hint (NOT always — forbidden with target_feature):
-        // the per-tier parse umbrella enables the same features, so the
-        // probe is inlinable there and LLVM takes the single-call-site
-        // hint, merging probe + parse loop into one body.
-        #[inline]
-        #[allow(unused_unsafe)]
-        // wasm32+simd128 selects `row_probe_simd128` at compile time, leaving
-        // `row_probe_scalar` (the only other tier compiled on wasm) unused.
-        #[cfg_attr(all(target_arch = "wasm32", target_feature = "simd128"), allow(dead_code))]
-        unsafe fn $name<const ROW_LOG: usize>(
-            &self,
-            abs_pos: usize,
-            lit_len: usize,
-            hash: Option<(usize, u8)>,
-        ) -> Option<MatchCandidate> {
-            // Standalone probe: the caller merges the rep candidate, so the
-            // probe itself starts unseeded.
-            row_probe_body!(self, abs_pos, lit_len, hash, None, ROW_LOG, $use_mask, $maskmac, $cpl)
-        }
-    };
-}
-
-// Reference mask wrappers for the bit-identity tests (`tag_mask_tests`). The
-// `row_tag_mask_*!` macros are the production source of truth (expanded inline
-// in the per-kernel `row_probe_*` methods); these fns just give the tests a
-// callable handle to assert SIMD == scalar. Gated to the same cfg as the test
-// module so they carry no weight in production builds.
-
 #[derive(Clone)]
 pub(crate) struct RowMatchGenerator {
     pub(crate) max_window_size: usize,
@@ -1222,14 +1002,9 @@ pub(crate) struct RowMatchGenerator {
     // capping frame length.
     pub(crate) row_positions: Vec<u32>,
     pub(crate) row_tags: Vec<u8>,
-    /// Cached tag-match SIMD kernel; CPU features are fixed per process, so
-    /// resolve once instead of querying per `row_candidate` call. On
-    /// wasm32+simd128 the tier is compile-time (`dispatch_tag_kernel!` selects
-    /// `Simd128Tags` directly), so the field is unread there.
-    #[cfg_attr(
-        all(target_arch = "wasm32", target_feature = "simd128"),
-        allow(dead_code)
-    )]
+    /// Cached tag-match kernel for runtime dispatch. A WebAssembly SIMD build
+    /// selects its kernel at compile time.
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
     tag_kernel: FastpathKernel,
     /// Attached immutable dictionary row index (upstream zstd `dictMatchState`). `Some`
     /// activates the bounded dict probe in `row_candidate_rl`; built once and
@@ -1268,6 +1043,7 @@ impl RowMatchGenerator {
             row_heads: Vec::new(),
             row_positions: Vec::new(),
             row_tags: Vec::new(),
+            #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
             tag_kernel: crate::encoding::fastpath::select_kernel(),
             dict: DictAttach::new(),
             borrowed_input: None,
@@ -1580,7 +1356,7 @@ impl RowMatchGenerator {
     ///    upstream zstd's depth-0 path jumps to `_storeSequence` on the first
     ///    repcode hit and skips the regular search at `abs_pos`. We
     ///    deviate here — both the rep probe at `abs_pos + 1` *and* the
-    ///    regular `row_candidate(abs_pos, ..)` are evaluated each
+    ///    regular row probe at `abs_pos` are evaluated each
     ///    iteration, and the longer match wins (ties go to rep for
     ///    cheaper encoding via [`best_len_offset_candidate`]). Upstream zstd
     ///    can afford pure commit-on-first-rep because it recovers any
@@ -1767,52 +1543,6 @@ impl RowMatchGenerator {
             .max(self.history_abs_start)
     }
 
-    /// Used only by the dead-code [`Self::start_matching`] (lazy-style
-    /// row parse). Kept paired with that method so reviving the lazy
-    /// path doesn't have to re-derive the rep+row best-of-two pick.
-    #[inline(always)]
-    pub(crate) fn best_match_rl<K: RowTags, const ROW_LOG: usize>(
-        &self,
-        abs_pos: usize,
-        lit_len: usize,
-    ) -> Option<MatchCandidate> {
-        let rep = self.repcode_candidate(abs_pos, lit_len);
-        // SAFETY: `K` selected by `dispatch_tag_kernel!` after `detect` confirmed
-        // its ISA; `K::probe` upholds the per-tier feature contract.
-        let row = unsafe { K::probe::<ROW_LOG>(self, abs_pos, lit_len, None) };
-        best_len_offset_candidate(rep, row)
-    }
-
-    #[inline(always)]
-    pub(crate) fn pick_lazy_match_rl<K: RowTags, const ROW_LOG: usize>(
-        &self,
-        abs_pos: usize,
-        lit_len: usize,
-        best: Option<MatchCandidate>,
-    ) -> Option<MatchCandidate> {
-        let best = best?;
-        // Same C-faithful length decision as the production monolith — route
-        // through the shared `lazy_decide!` macro (test-only path; its finder is
-        // out-of-line here, so the macro adds no register cost). `None` = commit.
-        // `target_len = usize::MAX` matches the production row lazy body: upstream
-        // lazy has no sufficient-length early-out (that belongs to the OPT parser).
-        match crate::encoding::lazy_parse::lazy_decide!(
-            best_len = best.match_len,
-            best_off = best.offset,
-            target_len = usize::MAX,
-            lazy_depth = self.lazy_depth,
-            abs_pos = abs_pos,
-            lit_len = lit_len,
-            history_end = self.history_abs_end(),
-            min_match = self.mls,
-            search = |p, l| self.best_match_rl::<K, ROW_LOG>(p, l),
-        ) {
-            ::core::option::Option::None => Some(best),
-            ::core::option::Option::Some(_) => None,
-        }
-    }
-
-    #[allow(dead_code)]
     #[inline(always)]
     pub(crate) fn repcode_candidate(
         &self,
@@ -1831,44 +1561,40 @@ impl RowMatchGenerator {
         )
     }
 
-    // Two-level bounded dispatch: resolve the tag kernel (`K: RowTags`)
-    // then the `row_log` const, both cold (once per block / call), into the
-    // fully monomorphised `_rl::<K, ROW_LOG>` hot loop. The per-position
-    // loop carries no runtime kernel enum and no `row_log` reload. Callers
-    // (driver + tests) use these bare names; the hot loops call the `_rl`
-    // siblings directly with the type and const already bound. `skip` does
-    // no tag compare, so it dispatches on `row_log` only.
+    // Select the instruction set and row width once per block. The matching
+    // loop and its tag scans do not branch on either choice.
     pub(crate) fn start_matching(&mut self, handle_sequence: impl for<'a> FnMut(Sequence<'a>)) {
         // SAFETY: same per-tier umbrella contract as `start_matching_greedy`.
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         {
             // SAFETY: simd128 is a compile-time feature here; no runtime gate.
-            unsafe { dispatch_row_log!(self.lazy_simd128::<Simd128Tags>(handle_sequence)) }
+            unsafe { dispatch_row_log!(self.lazy_simd128(handle_sequence)) }
         }
         #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
         {
             match self.tag_kernel {
                 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
                 FastpathKernel::Avx2Bmi2 => unsafe {
-                    dispatch_row_log!(self.lazy_avx2bmi2::<Avx2Bmi2Tags>(handle_sequence))
+                    dispatch_row_log!(self.lazy_avx2bmi2(handle_sequence))
                 },
                 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
                 FastpathKernel::Sse42 => unsafe {
-                    dispatch_row_log!(self.lazy_sse42::<Sse42Tags>(handle_sequence))
+                    dispatch_row_log!(self.lazy_sse42(handle_sequence))
                 },
                 #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
                 FastpathKernel::Neon => unsafe {
-                    dispatch_row_log!(self.lazy_neon::<NeonTags>(handle_sequence))
+                    dispatch_row_log!(self.lazy_neon(handle_sequence))
                 },
                 // SAFETY: the scalar kernel has no `#[target_feature]`; the
                 // fn is `unsafe` only for macro uniformity.
                 FastpathKernel::Scalar => unsafe {
-                    dispatch_row_log!(self.lazy_scalar::<ScalarTags>(handle_sequence))
+                    dispatch_row_log!(self.lazy_scalar(handle_sequence))
                 },
             }
         }
     }
 
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
     gen_lazy_monolith!(
         lazy_scalar,
         false,
@@ -1917,32 +1643,33 @@ impl RowMatchGenerator {
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         {
             // SAFETY: simd128 is a compile-time feature here; no runtime gate.
-            unsafe { dispatch_row_log!(self.greedy_simd128::<Simd128Tags>(handle_sequence)) }
+            unsafe { dispatch_row_log!(self.greedy_simd128(handle_sequence)) }
         }
         #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
         {
             match self.tag_kernel {
                 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
                 FastpathKernel::Avx2Bmi2 => unsafe {
-                    dispatch_row_log!(self.greedy_avx2bmi2::<Avx2Bmi2Tags>(handle_sequence))
+                    dispatch_row_log!(self.greedy_avx2bmi2(handle_sequence))
                 },
                 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
                 FastpathKernel::Sse42 => unsafe {
-                    dispatch_row_log!(self.greedy_sse42::<Sse42Tags>(handle_sequence))
+                    dispatch_row_log!(self.greedy_sse42(handle_sequence))
                 },
                 #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
                 FastpathKernel::Neon => unsafe {
-                    dispatch_row_log!(self.greedy_neon::<NeonTags>(handle_sequence))
+                    dispatch_row_log!(self.greedy_neon(handle_sequence))
                 },
                 // SAFETY: the scalar kernel has no `#[target_feature]`; the
                 // fn is `unsafe` only for macro uniformity.
                 FastpathKernel::Scalar => unsafe {
-                    dispatch_row_log!(self.greedy_scalar::<ScalarTags>(handle_sequence))
+                    dispatch_row_log!(self.greedy_scalar(handle_sequence))
                 },
             }
         }
     }
 
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
     gen_greedy_monolith!(
         greedy_scalar,
         false,
@@ -2025,102 +1752,6 @@ impl RowMatchGenerator {
         self.stage_borrowed_block(block_start, block_end);
         self.skip_matching_with_hint(incompressible_hint);
     }
-
-    #[allow(dead_code)]
-    pub(crate) fn best_match(&self, abs_pos: usize, lit_len: usize) -> Option<MatchCandidate> {
-        dispatch_tag_kernel!(self.best_match_k(abs_pos, lit_len))
-    }
-    fn best_match_k<K: RowTags>(&self, abs_pos: usize, lit_len: usize) -> Option<MatchCandidate> {
-        dispatch_row_log!(self.best_match_rl::<K>(abs_pos, lit_len))
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn pick_lazy_match(
-        &self,
-        abs_pos: usize,
-        lit_len: usize,
-        best: Option<MatchCandidate>,
-    ) -> Option<MatchCandidate> {
-        dispatch_tag_kernel!(self.pick_lazy_match_k(abs_pos, lit_len, best))
-    }
-    fn pick_lazy_match_k<K: RowTags>(
-        &self,
-        abs_pos: usize,
-        lit_len: usize,
-        best: Option<MatchCandidate>,
-    ) -> Option<MatchCandidate> {
-        dispatch_row_log!(self.pick_lazy_match_rl::<K>(abs_pos, lit_len, best))
-    }
-
-    // Per-kernel row match probe. Runtime kernel selection happens ONCE via
-    // `dispatch_tag_kernel!`; the selected tier's `row_probe_*` method is the
-    // monomorphised per-position hot loop with the SIMD tag-match inlined under
-    // its `#[target_feature]` umbrella (no dispatcher branch inside the loop).
-    #[allow(dead_code)]
-    pub(crate) fn row_candidate(&self, abs_pos: usize, lit_len: usize) -> Option<MatchCandidate> {
-        dispatch_tag_kernel!(self.row_candidate_k(abs_pos, lit_len))
-    }
-    fn row_candidate_k<K: RowTags>(
-        &self,
-        abs_pos: usize,
-        lit_len: usize,
-    ) -> Option<MatchCandidate> {
-        // SAFETY: `dispatch_tag_kernel!` only selects a `K` whose ISA `detect`
-        // confirmed present, upholding `K::probe`'s per-tier feature contract.
-        match self.row_log {
-            4 => unsafe { K::probe::<4>(self, abs_pos, lit_len, None) },
-            5 => unsafe { K::probe::<5>(self, abs_pos, lit_len, None) },
-            6 => unsafe { K::probe::<6>(self, abs_pos, lit_len, None) },
-            _ => unreachable!("row_log is clamped to 4..=6 in configure()"),
-        }
-    }
-
-    // Each tier pairs its tag-match mask macro with the matching
-    // `fastpath::<tier>::common_prefix_len_ptr` so BOTH inline under the tier's
-    // `#[target_feature]` umbrella (the cpl features must be a subset of the
-    // probe's: SSE4.2 ⊇ the SSE2 mask intrinsics, AVX2+BMI2 ⊇ the AVX2 mask).
-    // Scalar uses the on-the-fly per-slot byte compare (`use_mask = false`).
-    gen_row_probe!(
-        row_probe_scalar,
-        false,
-        row_tag_mask_scalar,
-        crate::encoding::fastpath::scalar::common_prefix_len_ptr
-    );
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    gen_row_probe!(
-        row_probe_sse42,
-        true,
-        row_tag_mask_sse2,
-        crate::encoding::fastpath::sse42::common_prefix_len_ptr,
-        "sse4.2"
-    );
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    gen_row_probe!(
-        row_probe_avx2bmi2,
-        true,
-        row_tag_mask_avx2,
-        crate::encoding::fastpath::avx2_bmi2::common_prefix_len_ptr,
-        "avx2,bmi2"
-    );
-    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-    gen_row_probe!(
-        row_probe_neon,
-        true,
-        row_tag_mask_neon,
-        crate::encoding::fastpath::neon::common_prefix_len_ptr,
-        "neon"
-    );
-    // wasm simd128 tag-match mask + scalar (portable) cpl. wasm simd128 is
-    // compile-time, so no `#[target_feature]` umbrella is passed; mirrors the
-    // wasm tier's behavior of vectorising only the tag scan, with the portable
-    // prefix-length kernel.
-    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
-    gen_row_probe!(
-        row_probe_simd128,
-        true,
-        row_tag_mask_simd128,
-        crate::encoding::fastpath::scalar::common_prefix_len_ptr
-    );
 
     fn extend_backwards(
         &self,

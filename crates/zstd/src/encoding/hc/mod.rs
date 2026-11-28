@@ -24,8 +24,6 @@
 //! Upstream zstd parity reference: `lib/compress/zstd_lazy.c`,
 //! `ZSTD_HcFindBestMatch` / `ZSTD_compressBlock_lazy2_generic`.
 
-#![allow(dead_code)]
-
 pub(crate) mod generator;
 pub(crate) mod optimal;
 pub(crate) mod priceset;
@@ -33,7 +31,6 @@ pub(crate) mod priceset;
 use super::cost_model::{HC_FORMAT_MINMATCH, HC_OPT_NUM, HcOptimalCostProfile};
 use super::match_table::helpers::common_prefix_len;
 use super::match_table::storage::{HC_EMPTY, MatchTable};
-use super::opt::types::MatchCandidate;
 
 /// Minimum match length emitted by the lazy / lazy2 chain walker.
 /// Upstream zstd parity: `MIN_MATCH` in `lib/compress/zstd_lazy.c`.
@@ -445,7 +442,10 @@ impl HcMatcher {
     /// no-dict path; the `DICT = true` monomorph inlines it into the dict hot
     /// path.
     #[inline]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the candidate walk separates dictionary bounds and mutable offset prediction from the live source"
+    )]
     fn dms_chain_walk(
         &self,
         table: &MatchTable,
@@ -693,239 +693,6 @@ impl HcMatcher {
             ::core::option::Option::Some(::core::option::Option::Some(carry)) => Some(carry),
             ::core::option::Option::Some(::core::option::Option::None) => Some(HcMatch::NONE),
         }
-    }
-
-    /// Cross-platform dispatcher for the rep-code probe used by the
-    /// optimal-parser pipeline. Routes to the kernel-specific variant
-    /// so the per-rep `common_prefix_len_ptr` call inlines under the
-    /// callee's `target_feature` umbrella. Test / external callers
-    /// only — the on-encode hot path bypasses this dispatcher via the
-    /// kernel-specific variants invoked from inside
-    /// `collect_optimal_candidates_initialized_<kernel>`.
-    #[allow(dead_code)]
-    #[inline(always)]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn for_each_repcode_candidate_with_reps(
-        &self,
-        table: &MatchTable,
-        abs_pos: usize,
-        lit_len: usize,
-        reps: [u32; 3],
-        current_abs_end: usize,
-        min_match_len: usize,
-        f: impl FnMut(MatchCandidate),
-    ) {
-        // SAFETY: each branch verifies the target_feature requirement of
-        // the callee (same shape as the BT walk dispatchers).
-        #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-        unsafe {
-            self.for_each_repcode_candidate_with_reps_neon(
-                table,
-                abs_pos,
-                lit_len,
-                reps,
-                current_abs_end,
-                min_match_len,
-                f,
-            )
-        }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        {
-            use crate::encoding::fastpath::FastpathKernel;
-            match table.kernel {
-                FastpathKernel::Avx2Bmi2 => unsafe {
-                    self.for_each_repcode_candidate_with_reps_avx2_bmi2(
-                        table,
-                        abs_pos,
-                        lit_len,
-                        reps,
-                        current_abs_end,
-                        min_match_len,
-                        f,
-                    )
-                },
-                FastpathKernel::Sse42 => unsafe {
-                    self.for_each_repcode_candidate_with_reps_sse42(
-                        table,
-                        abs_pos,
-                        lit_len,
-                        reps,
-                        current_abs_end,
-                        min_match_len,
-                        f,
-                    )
-                },
-                FastpathKernel::Scalar => self.for_each_repcode_candidate_with_reps_scalar(
-                    table,
-                    abs_pos,
-                    lit_len,
-                    reps,
-                    current_abs_end,
-                    min_match_len,
-                    f,
-                ),
-            }
-        }
-        #[cfg(not(any(
-            all(target_arch = "aarch64", target_endian = "little"),
-            target_arch = "x86",
-            target_arch = "x86_64"
-        )))]
-        {
-            self.for_each_repcode_candidate_with_reps_scalar(
-                table,
-                abs_pos,
-                lit_len,
-                reps,
-                current_abs_end,
-                min_match_len,
-                f,
-            )
-        }
-    }
-
-    /// NEON umbrella variant of the rep-code probe.
-    ///
-    /// # Safety
-    /// Caller must be running on an AArch64 target with NEON
-    /// available (baseline on AArch64).
-    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-    #[target_feature(enable = "neon")]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) unsafe fn for_each_repcode_candidate_with_reps_neon(
-        &self,
-        table: &MatchTable,
-        abs_pos: usize,
-        lit_len: usize,
-        reps: [u32; 3],
-        current_abs_end: usize,
-        min_match_len: usize,
-        mut f: impl FnMut(MatchCandidate),
-    ) {
-        let _ = self;
-        super::hc::generator::for_each_repcode_candidate_body!(
-            table,
-            abs_pos,
-            lit_len,
-            reps,
-            current_abs_end,
-            min_match_len,
-            f,
-            crate::encoding::fastpath::neon::common_prefix_len_ptr,
-        )
-    }
-
-    /// SSE4.2 umbrella variant.
-    ///
-    /// # Safety
-    /// Caller must be running on x86/x86_64 with SSE4.2 available.
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    #[target_feature(enable = "sse4.2")]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) unsafe fn for_each_repcode_candidate_with_reps_sse42(
-        &self,
-        table: &MatchTable,
-        abs_pos: usize,
-        lit_len: usize,
-        reps: [u32; 3],
-        current_abs_end: usize,
-        min_match_len: usize,
-        mut f: impl FnMut(MatchCandidate),
-    ) {
-        let _ = self;
-        super::hc::generator::for_each_repcode_candidate_body!(
-            table,
-            abs_pos,
-            lit_len,
-            reps,
-            current_abs_end,
-            min_match_len,
-            f,
-            crate::encoding::fastpath::sse42::common_prefix_len_ptr,
-        )
-    }
-
-    /// AVX2+BMI2 umbrella variant.
-    ///
-    /// # Safety
-    /// Caller must be running on x86/x86_64 with AVX2 + BMI2 available.
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    #[target_feature(enable = "avx2,bmi2")]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) unsafe fn for_each_repcode_candidate_with_reps_avx2_bmi2(
-        &self,
-        table: &MatchTable,
-        abs_pos: usize,
-        lit_len: usize,
-        reps: [u32; 3],
-        current_abs_end: usize,
-        min_match_len: usize,
-        mut f: impl FnMut(MatchCandidate),
-    ) {
-        let _ = self;
-        super::hc::generator::for_each_repcode_candidate_body!(
-            table,
-            abs_pos,
-            lit_len,
-            reps,
-            current_abs_end,
-            min_match_len,
-            f,
-            crate::encoding::fastpath::avx2_bmi2::common_prefix_len_ptr,
-        )
-    }
-
-    /// Scalar fallback used on non-AArch64 targets.
-    #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn for_each_repcode_candidate_with_reps_scalar(
-        &self,
-        table: &MatchTable,
-        abs_pos: usize,
-        lit_len: usize,
-        reps: [u32; 3],
-        current_abs_end: usize,
-        min_match_len: usize,
-        mut f: impl FnMut(MatchCandidate),
-    ) {
-        let _ = self;
-        super::hc::generator::for_each_repcode_candidate_body!(
-            table,
-            abs_pos,
-            lit_len,
-            reps,
-            current_abs_end,
-            min_match_len,
-            f,
-            crate::encoding::fastpath::scalar::common_prefix_len_ptr,
-        )
-    }
-
-    /// Walk a candidate match backwards over the literal run so the
-    /// matcher can absorb literal bytes that happen to match the byte
-    /// preceding the candidate. Upstream zstd parity: equivalent to the back
-    /// extend inside `ZSTD_HcFindBestMatch` before committing a
-    /// sequence.
-    ///
-    /// Takes `&MatchTable` because the only thing it needs is read
-    /// access to the contiguous history mirror — kept off `&self` so
-    /// callers don't have to hand it an HcMatcher reference they
-    /// don't otherwise use.
-    pub(crate) fn extend_backwards(
-        table: &MatchTable,
-        candidate_pos: usize,
-        abs_pos: usize,
-        match_len: usize,
-        lit_len: usize,
-    ) -> MatchCandidate {
-        crate::encoding::match_table::helpers::extend_backwards_shared(
-            table.live_history(),
-            table.history_abs_start,
-            candidate_pos,
-            abs_pos,
-            match_len,
-            lit_len,
-        )
     }
 
     /// Upstream zstd parity: per-pass clamp of the "good enough — stop probing"

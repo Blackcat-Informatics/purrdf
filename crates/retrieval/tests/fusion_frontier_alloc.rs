@@ -125,7 +125,10 @@ struct LazyStream {
 // The trait's methods are `async`; this fixture's body is synchronous because it
 // mints its rows arithmetically. The keyword is the trait's, not a signal that
 // the body awaits.
-#[allow(clippy::unused_async_trait_impl)]
+#[expect(
+    clippy::unused_async_trait_impl,
+    reason = "the deterministic fixture implements the awaited stream contract without scheduling external work"
+)]
 impl RankedStream for LazyStream {
     type Item = Term;
 

@@ -73,7 +73,10 @@ pub mod exact;
 pub mod golden;
 pub mod harness;
 #[cfg(target_arch = "wasm32")]
-#[allow(unsafe_code, reason = "the expansion of `#[wasm_bindgen]` imports")]
+#[expect(
+    unsafe_code,
+    reason = "WebAssembly host imports expand to foreign calls"
+)]
 mod host;
 pub mod jsonschema_metaschemas;
 pub mod paths;
@@ -142,19 +145,18 @@ macro_rules! harness_main {
     };
     (@entry $entry:ident; $( $(#[$meta:meta])* $case:ident ),+ $(,)?) => {
         fn main() -> ::std::process::ExitCode {
-            // `mut` is unused when every registration is configured away.
-            #[allow(unused_mut, clippy::vec_init_then_push)]
-            let mut trials: ::std::vec::Vec<$crate::harness::Trial> = ::std::vec::Vec::new();
-            $(
-                $(#[$meta])*
-                trials.push($crate::harness::Trial::test(
-                    ::core::stringify!($case),
-                    || {
-                        $case();
-                        ::core::result::Result::Ok(())
-                    },
-                ));
-            )+
+            let trials: ::std::vec::Vec<$crate::harness::Trial> = [
+                $(
+                    $(#[$meta])*
+                    $crate::harness::Trial::test(
+                        ::core::stringify!($case),
+                        || {
+                            $case();
+                            ::core::result::Result::Ok(())
+                        },
+                    ),
+                )+
+            ].into();
             $crate::harness::$entry(trials)
         }
     };

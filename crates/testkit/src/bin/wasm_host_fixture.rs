@@ -14,7 +14,10 @@
 use purrdf_testkit::harness::without_host_clock_or_entropy;
 
 #[cfg(target_arch = "wasm32")]
-#[allow(unsafe_code, reason = "the expansion of #[wasm_bindgen] host imports")]
+#[expect(
+    unsafe_code,
+    reason = "the clock and entropy imports expand to foreign calls"
+)]
 mod host {
     use wasm_bindgen::prelude::wasm_bindgen;
 

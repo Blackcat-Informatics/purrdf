@@ -155,7 +155,10 @@ impl MockStream {
 // The trait's methods are `async`; the mock's bodies are synchronous because
 // its rows are pre-scripted. The `async` keyword is required to implement the
 // trait, not a signal that this body awaits.
-#[allow(clippy::unused_async_trait_impl)]
+#[expect(
+    clippy::unused_async_trait_impl,
+    reason = "the deterministic fixture implements the awaited stream contract without scheduling external work"
+)]
 impl RankedStream for MockStream {
     type Item = Term;
 

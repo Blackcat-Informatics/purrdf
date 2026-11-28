@@ -187,7 +187,10 @@ pub fn grapheme_bounds(text: &str) -> GraphemeBounds<'_> {
 }
 
 // UAX 29 has independent pictographic and Indic state machines.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "extended pictographic and Indic contexts advance independently under Unicode grapheme rules"
+)]
 #[derive(Default)]
 struct Context {
     previous: u8,

@@ -5,7 +5,6 @@
 
 // Declared as a module by more than one integration-test binary, and no single binary uses
 // every helper; an unused-here helper is used there.
-#![allow(dead_code)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;

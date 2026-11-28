@@ -202,7 +202,7 @@ pub enum QuoteStyle {
 /// assert_eq!(rows, [["a", "b"], ["1", "2"]]);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[allow(
+#[expect(
     clippy::struct_excessive_bools,
     reason = "one public field per CSVW dialect flag, spelled as the metadata vocabulary spells it"
 )]

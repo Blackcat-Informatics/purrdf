@@ -356,7 +356,10 @@ impl FailureProblem {
     ///
     /// An internal failure without a `correlationId`.
     #[wasm_bindgen]
-    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "binding ABI receives owned values"
+    )]
     pub fn body(&self, correlation_id: Option<String>) -> Result<String, JsError> {
         self.render(correlation_id.as_deref())
             .map_err(|message| JsError::new(&message))
@@ -489,7 +492,10 @@ impl SparqlProtocolRequest {
     /// The typed protocol refusal: `name` is the `ProtocolError` variant, `status` the
     /// HTTP status, `parameter` the parameter at fault when there is one.
     #[wasm_bindgen]
-    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "binding ABI receives owned values"
+    )]
     pub fn parse(
         method: &str,
         content_type: Option<String>,
@@ -602,7 +608,10 @@ impl SparqlProtocolRequest {
     /// `MalformedOperation` as [`Self::result_kind`]; and an update, which has no result
     /// to negotiate.
     #[wasm_bindgen]
-    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "binding ABI receives owned values"
+    )]
     pub fn negotiate(&self, accept: Option<String>) -> Result<Option<String>, JsValue> {
         match self.inner.result_kind() {
             Err(error) => Err(protocol_error(&error)),
@@ -638,7 +647,10 @@ impl SparqlProtocolRequest {
     /// exception nothing classified — the host's own fault.
     #[wasm_bindgen(js_name = problemFor)]
     #[must_use]
-    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "binding ABI receives owned values"
+    )]
     pub fn problem_for(error: JsValue, cancelled: bool) -> FailureProblem {
         let (code, message) = if error.is_object() {
             let failure = error.unchecked_ref::<Failure>();
@@ -659,7 +671,10 @@ impl SparqlProtocolRequest {
     ///
     /// A record that describes no governor this build names.
     #[wasm_bindgen(js_name = problemForTrip)]
-    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "binding ABI receives owned values"
+    )]
     pub fn problem_for_trip(tripped: JsValue) -> Result<FailureProblem, JsError> {
         if !tripped.is_object() {
             return Err(JsError::new(

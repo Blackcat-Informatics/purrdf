@@ -112,8 +112,11 @@ fn run_reasoning<T: Send>(
 /// the command line, through the C ABI, through WASM and from Python.
 #[pyclass(name = "Regime", eq, eq_int)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-#[allow(
+#[expect(
+    non_camel_case_types,
+    reason = "the Rust variants preserve the Python-visible enum member names"
+)]
+#[expect(
     clippy::upper_case_acronyms,
     reason = "the SCREAMING_SNAKE variant spellings ARE the Python-visible enum members (`Regime.OWL_RL`), so they must not be renamed"
 )]
@@ -249,8 +252,11 @@ fn native_regime(regime: &Bound<'_, PyAny>) -> PyResult<Regime> {
 /// knowledge base, and for a passed evaluation limit.
 #[pyfunction]
 #[pyo3(signature = (dataset, regime, program, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None, max_term_arena_bytes=None))]
-#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-#[allow(
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "binding ABI receives owned values"
+)]
+#[expect(
     clippy::too_many_arguments,
     reason = "the dataset, the regime's program, the import table and each limit are named \
               explicitly at the boundary, in the order every other host takes them"
@@ -341,8 +347,11 @@ fn materialize(
 /// evaluation limit, naming the keyword argument that raises it.
 #[pyfunction]
 #[pyo3(signature = (data, regime, program, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None, max_term_arena_bytes=None, canonical_search, cancel=None))]
-#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-#[allow(
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "binding ABI receives owned values"
+)]
+#[expect(
     clippy::too_many_arguments,
     reason = "the document, the regime's program, the import table and each limit are named \
               explicitly at the boundary, in the order every other host takes them"
@@ -489,8 +498,11 @@ fn extensions(regime: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
 /// reverse mapping.
 #[pyfunction]
 #[pyo3(signature = (data, imports, premise_iris, step_cap = 0, work_cap = 0 , *, canonical_search, cancel=None))]
-#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-#[allow(
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "binding ABI receives owned values"
+)]
+#[expect(
     clippy::too_many_arguments,
     reason = "the host exposes canonical search and cancellation beside the existing reasoning controls"
 )]
@@ -903,12 +915,15 @@ fn premise_iri_refs(premise_iris: &[String]) -> PyResult<Vec<&str>> {
 /// inconsistent premise, whose refusal carries the full report.
 #[pyfunction]
 #[pyo3(signature = (regime, data, pattern, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None, max_term_arena_bytes=None))]
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the question, the import table and each evaluation limit are named explicitly \
               at the boundary, in the order every other host takes them"
 )]
-#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "binding ABI receives owned values"
+)]
 fn certain_answers(
     py: Python<'_>,
     regime: &Bound<'_, PyAny>,
@@ -966,12 +981,15 @@ fn certain_answers(
 /// Raises `ValueError` as [`certain_answers`].
 #[pyfunction]
 #[pyo3(signature = (regime, premise, conclusion, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None, max_term_arena_bytes=None))]
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the question, the import table and each evaluation limit are named explicitly \
               at the boundary, in the order every other host takes them"
 )]
-#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "binding ABI receives owned values"
+)]
 fn graph_entails(
     py: Python<'_>,
     regime: &Bound<'_, PyAny>,
@@ -1021,12 +1039,15 @@ fn graph_entails(
 /// Raises `ValueError` as [`certain_answers`].
 #[pyfunction]
 #[pyo3(signature = (regime, premise, conclusion, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None, max_term_arena_bytes=None))]
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the question, the import table and each evaluation limit are named explicitly \
               at the boundary, in the order every other host takes them"
 )]
-#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "binding ABI receives owned values"
+)]
 fn verify_entailment(
     py: Python<'_>,
     regime: &Bound<'_, PyAny>,
@@ -1086,7 +1107,7 @@ fn verify_entailment(
 /// service, or whatever that service itself refuses.
 #[pyfunction]
 #[pyo3(signature = (data, service, argument = "", step_cap = 0, work_cap = 0 , *, canonical_search, cancel=None))]
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the host exposes canonical search and cancellation beside the existing proof controls"
 )]
@@ -1139,7 +1160,7 @@ fn prove(
 /// rejection.
 #[pyfunction]
 #[pyo3(signature = (data, service, argument, answer, certificate, proof , *, canonical_search, cancel=None))]
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the host exposes canonical search and cancellation beside the original proof operands"
 )]

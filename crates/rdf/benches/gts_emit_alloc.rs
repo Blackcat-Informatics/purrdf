@@ -1,9 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench entry points and probe helpers are private measurement tooling, not API.
-#![allow(missing_docs)]
-
 //! Report-only allocation demand of snapshot emission through `SnapshotBuilder`.
 //!
 //! `cargo bench -p purrdf-rdf --bench gts_emit_alloc`. The fixture is parsed

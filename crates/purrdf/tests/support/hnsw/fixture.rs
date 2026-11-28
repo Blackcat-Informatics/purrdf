@@ -7,16 +7,17 @@
 
 // Included by `#[path]` into several test and bench binaries, each of which uses a different
 // subset. Matches the sibling `support/purremb.rs`.
-#![allow(dead_code, unreachable_pub, unused_imports)]
+#![expect(
+    dead_code,
+    reason = "each target uses only part of the shared HNSW fixture"
+)]
 
 use purrdf_core::distance::{Arithmetic, Exact, FloatEnvironmentError, FloatEnvironmentEvidence};
 use purrdf_hnsw::{HnswError, Kernel, Ranked, VectorMatrix};
 use purrdf_sparql_eval::{EmbeddingKnnRelation, EvalError, PfArgs, PfRow, PropertyFunction};
 
-pub use purrdf_hnsw::fixture::params;
-
 /// Whether `refusal` names the MXCSR flush-to-zero departure used by x86 tests.
-pub fn is_ftz_refusal(refusal: &FloatEnvironmentError) -> bool {
+pub(crate) fn is_ftz_refusal(refusal: &FloatEnvironmentError) -> bool {
     let FloatEnvironmentError::FlushToZero { evidence } = refusal else {
         return false;
     };
@@ -27,14 +28,19 @@ pub fn is_ftz_refusal(refusal: &FloatEnvironmentError) -> bool {
 }
 
 /// Whether an index refuses the MXCSR departure on its computing thread.
-pub fn is_ftz(error: &HnswError) -> bool {
+pub(crate) fn is_ftz(error: &HnswError) -> bool {
     matches!(error, HnswError::FloatEnvironment(refusal) if is_ftz_refusal(refusal))
 }
 
 /// A deterministic `rows x dims` matrix of `SplitMix64` draws in `[-1, 1)` from `seed`.
 /// With `zero = Some(substitute)` an exact zero draw is replaced by `substitute`; with
 /// `None` the draws are kept as they are. Nothing here reads a clock or an RNG.
-pub fn seeded_matrix(rows: usize, dims: usize, seed: u64, zero: Option<f64>) -> VectorMatrix {
+pub(crate) fn seeded_matrix(
+    rows: usize,
+    dims: usize,
+    seed: u64,
+    zero: Option<f64>,
+) -> VectorMatrix {
     let mut state = seed;
     let data = (0..rows * dims)
         .map(|_| match zero {
@@ -48,7 +54,7 @@ pub fn seeded_matrix(rows: usize, dims: usize, seed: u64, zero: Option<f64>) -> 
 }
 
 /// A batch answer as its rows and distance bits, so equality is bit-identity.
-pub fn bits(batch: &[Vec<Ranked>]) -> Vec<Vec<(usize, u64)>> {
+pub(crate) fn bits(batch: &[Vec<Ranked>]) -> Vec<Vec<(usize, u64)>> {
     batch
         .iter()
         .map(|ranked| {
@@ -62,7 +68,7 @@ pub fn bits(batch: &[Vec<Ranked>]) -> Vec<Vec<(usize, u64)>> {
 
 /// Every row of one kNN invocation seeded at `seed`: the ranked read of depth 3 when
 /// `neighbour` is free, the membership lookup of `neighbour` when it is bound.
-pub fn knn_invoke<A: Arithmetic>(
+pub(crate) fn knn_invoke<A: Arithmetic>(
     relation: &EmbeddingKnnRelation<A>,
     seed: &purrdf_core::TermValue,
     neighbour: Option<&purrdf_core::TermValue>,
@@ -82,7 +88,7 @@ pub fn knn_invoke<A: Arithmetic>(
 
 /// Every row of `matrix` scored against row `query` under `kernel`, in the exact path's
 /// order. `norms` are the rows' exact norms.
-pub fn exact_scored(
+pub(crate) fn exact_scored(
     kernel: Kernel,
     matrix: &VectorMatrix,
     norms: &[f64],

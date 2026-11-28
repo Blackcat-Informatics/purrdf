@@ -16,6 +16,10 @@ use purrdf_gts::model::{Graph, Term, TermKind};
 use purrdf_gts::reader::read;
 use purrdf_gts::writer::Writer;
 
+#[expect(
+    dead_code,
+    reason = "this test uses only one of the two shared triple-term forms"
+)]
 #[path = "support/reifier_terms.rs"]
 mod reifier_terms;
 use reifier_terms::triple_term;

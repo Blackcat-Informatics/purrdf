@@ -71,7 +71,10 @@ impl Tables {
         }
         let sine = ops.mul(sine, reduced);
         // |turns| <= 41 on the admitted range, so this conversion is exact.
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the admitted input puts the integral quarter turns in the range from negative to positive forty-one"
+        )]
         let quadrant = (turns as i64).rem_euclid(4);
         Some(match quadrant {
             0 => (sine, cosine),
@@ -131,7 +134,10 @@ fn signed(value: f64, positive: bool) -> f64 {
 
 /// Reduced-latitude endpoint data of one canonical inverse problem.
 // The flags mirror the certified solver's independent symmetry predicates.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag mirrors an independent symmetry predicate of the certified solver"
+)]
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Sphere {
     pub(super) sin1: f64,

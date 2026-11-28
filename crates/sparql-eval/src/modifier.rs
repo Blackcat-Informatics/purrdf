@@ -874,9 +874,12 @@ pub(crate) struct GraphSequence<I: ViewTermId> {
     direct: Option<Evaluated<I>>,
 }
 
-#[expect(
-    clippy::large_enum_variant,
-    reason = "inline handoff preserves the driver admitted frame ownership without another allocation"
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        clippy::large_enum_variant,
+        reason = "inline handoff preserves the driver admitted frame ownership without another allocation"
+    )
 )]
 pub(crate) enum GraphStart<I: ViewTermId> {
     Complete(Evaluated<I>),
@@ -1370,7 +1373,10 @@ fn yields_nothing_without_rows_in_the_active_graph(pattern: &GraphPattern) -> bo
 /// no row in `g` for any particular reifier either.
 // Keep the three short-circuiting first-row probes in the graph-major caller.
 // The ordinary static mode must not add a helper call/live frame per graph.
-#[allow(clippy::inline_always)]
+#[expect(
+    clippy::inline_always,
+    reason = "the graph scan inlines the dataset-specific row-presence check"
+)]
 #[inline(always)]
 fn graph_holds_no_rows<D: DatasetView>(dataset: &D, g: D::Id) -> bool {
     let scope = GraphMatch::Named(g);
@@ -1385,7 +1391,10 @@ fn graph_holds_no_rows<D: DatasetView>(dataset: &D, g: D::Id) -> bool {
 /// Match a graph candidate against an existing column, or append its new column.
 /// The native graph loop supplies its one output buffer across every graph.
 // Share the sequence loop without a second call boundary or native result copy.
-#[allow(clippy::inline_always)]
+#[expect(
+    clippy::inline_always,
+    reason = "the graph sequence uses the same inlined row representation as the surrounding scan"
+)]
 #[inline(always)]
 fn append_graph_rows<I: ViewTermId>(
     seq: SolutionSeq<I>,
@@ -3709,6 +3718,13 @@ impl ContextualFold {
 }
 
 impl ContextualCustomFold {
+    #[cfg_attr(
+        target_pointer_width = "32",
+        expect(
+            clippy::boxed_local,
+            reason = "the consuming fold destroys the admitted box before the caller refunds its storage"
+        )
+    )]
     fn finish(
         self: Box<Self>,
         absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
@@ -5196,7 +5212,6 @@ pub(crate) fn aggregate_numeric_cost(
 }
 
 // Preserve the native fold's inline tail and erase its already-excluded fast-path test.
-#[allow(clippy::inline_always)]
 #[inline(always)]
 fn aggregate_numeric_tail_cost<const CHECK_FAST_PATH: bool>(
     function: &AggregateFunction,

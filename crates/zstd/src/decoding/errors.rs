@@ -22,7 +22,14 @@ use std::error::Error as StdError;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum FrameDescriptorError {
-    InvalidFrameContentSizeFlag { got: u8 },
+    InvalidFrameContentSizeFlag {
+        got: u8,
+    },
+    /// The frame sets a descriptor bit reserved by the format.
+    ReservedBitSet {
+        /// The descriptor byte as it appeared on the wire.
+        descriptor: u8,
+    },
 }
 
 impl fmt::Display for FrameDescriptorError {
@@ -32,6 +39,12 @@ impl fmt::Display for FrameDescriptorError {
                 f,
                 "Invalid Frame_Content_Size_Flag; Is: {got}, Should be one of: 0, 1, 2, 3"
             ),
+            Self::ReservedBitSet { descriptor } => {
+                write!(
+                    f,
+                    "reserved bit set in Zstandard frame descriptor {descriptor:#04x}"
+                )
+            }
         }
     }
 }
@@ -379,9 +392,7 @@ pub enum DecodeBufferError {
     ZeroOffset,
     /// Legacy unit variant kept for binary compatibility with earlier
     /// snapshots of this enum. Not surfaced from any current
-    /// production path — `BufferBackend::try_extend` /
-    /// `try_extend_from_within` and the new `try_reserve` (used by
-    /// `DecodeBuffer::repeat`) carry their failures through the
+    /// production path. `DecodeBuffer::repeat` carries capacity failures through the
     /// richer [`Self::OutputBufferOverflow`] variant below, which
     /// reports the offending `tail` / `requested` / `capacity`
     /// triple. New code should pattern-match on
@@ -1017,7 +1028,7 @@ impl fmt::Display for LiteralsSectionType {
         match self {
             LiteralsSectionType::Compressed => write!(f, "Compressed"),
             LiteralsSectionType::Raw => write!(f, "Raw"),
-            LiteralsSectionType::RLE => write!(f, "RLE"),
+            LiteralsSectionType::Rle => write!(f, "RLE"),
             LiteralsSectionType::Treeless => write!(f, "Treeless"),
         }
     }

@@ -481,7 +481,7 @@ fn numeric_string_renderings_read_back_as_the_same_bits() {
         (f64::NEG_INFINITY, "-INF"),
     ] {
         assert_eq!(xpath_double_text(value).as_str(), expected);
-        #[allow(
+        #[expect(
             clippy::cast_possible_truncation,
             reason = "the special values narrow exactly"
         )]
@@ -583,7 +583,7 @@ fn float_double_and_decimal_casts_to_integer_types_truncate_toward_zero() {
                 let Some(value) = bound.checked_add(delta) else {
                     continue;
                 };
-                #[allow(clippy::cast_precision_loss, reason = "the nearest double is the case")]
+                #[expect(clippy::cast_precision_loss, reason = "the nearest double is the case")]
                 let double = value as f64;
                 doubles.extend([double, double.next_up(), double.next_down()]);
                 decimals.push((value, 0));
@@ -641,7 +641,7 @@ fn float_double_and_decimal_casts_to_integer_types_truncate_toward_zero() {
     // No integer value: an error for every target.
     for special in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         checked += assert_integer_casts(&XsdValue::Double(special), None);
-        #[allow(
+        #[expect(
             clippy::cast_possible_truncation,
             reason = "the special values narrow exactly"
         )]

@@ -574,7 +574,7 @@ purrdf_lex::json_record!(impl ToJson for VoidStaticStatement {
 
 /// Explicit compute and materialization bounds for VoID generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(
+#[expect(
     clippy::struct_field_names,
     reason = "execution-limit JSON fields intentionally share the `max_` policy prefix"
 )]
@@ -595,7 +595,7 @@ impl VoidExecutionLimits {
     /// # Errors
     ///
     /// Rejects zero or values beyond the portable `u32` ceiling.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "every independent VoID compute and configuration budget is mandatory"
     )]
@@ -728,7 +728,7 @@ impl VoidConfig {
     ///
     /// Rejects malformed identities, duplicate/ambiguous selectors or prefixes,
     /// missing local ownership, role collisions, and configuration-limit breaches.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "VoID source, target, identity, graph, registry, and budget policies are independent"
     )]

@@ -19,9 +19,10 @@
 
 #[path = "support/hnsw/fixture.rs"]
 mod fixture;
-use fixture::{bits, params, seeded_matrix};
+use fixture::{bits, seeded_matrix};
 use purrdf_core::DistanceMetric;
 use purrdf_core::distance::{FloatEnvironmentError, FloatEnvironmentEvidence, Reassociated};
+use purrdf_hnsw::fixture::params;
 use purrdf_hnsw::{HnswError, HnswIndex, Ranked};
 use purrdf_xsd::ieee::x87;
 

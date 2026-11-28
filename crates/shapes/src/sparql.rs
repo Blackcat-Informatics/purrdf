@@ -173,7 +173,10 @@ pub(crate) fn eval_target_ask_view<
 /// # Errors
 ///
 /// Returns `Err(String)` if execution fails or if the result is not a SELECT.
-#[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the function receives the independent SHACL-SPARQL validator inputs"
+)]
 pub fn eval_sparql_constraint(
     dataset: &Arc<RdfDataset>,
     focus: &Term,
@@ -251,7 +254,10 @@ impl SparqlReportContext<'_> {
 ///
 /// `focus_id` is `dataset`'s own id for `focus` when the caller holds one in THIS
 /// view's id space, and `None` otherwise; [`bind_focus`] is what it reaches.
-#[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the function receives the independent SHACL-SPARQL validator inputs"
+)]
 pub(crate) fn eval_sparql_constraint_view<
     D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
 >(
@@ -1978,7 +1984,6 @@ pub(crate) fn with_cached_execution<R>(
 /// # Errors
 ///
 /// As [`with_cached_execution`] and [`run_bound_view`].
-#[allow(clippy::too_many_arguments)] // The prepared door needs its key, its options and its two callbacks.
 fn run_cached_prepared_view<
     D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
     R,
@@ -2020,7 +2025,10 @@ fn project_solutions<'a, 'd, D: DatasetView<ReadError = std::convert::Infallible
 /// [`project_solutions`].
 // By value because this is passed AS a `FnOnce(InternedOutcome<'_, '_, D>) -> R`, the
 // shape every run entry's `visit` has; a reference would not satisfy that bound.
-#[allow(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the evaluation visitor receives and consumes the interned outcome by value"
+)]
 fn project_boolean<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
     outcome: InternedOutcome<'_, '_, D>,
 ) -> Result<bool, String> {
@@ -2038,7 +2046,10 @@ fn project_boolean<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
 /// Take a CONSTRUCT outcome's frozen graph, refusing any other query form. See
 /// [`project_solutions`].
 // By value for the same reason as [`project_boolean`].
-#[allow(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the evaluation visitor receives and consumes the interned outcome by value"
+)]
 fn project_graph<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
     outcome: InternedOutcome<'_, '_, D>,
 ) -> Result<purrdf_sparql_eval::RetainedGraph, String> {

@@ -4,21 +4,15 @@
 //! The folded multiply: the low and high halves of a 128-bit product,
 //! XOR-ed together.
 //!
-//! Two formulations compute the same function. [`fold_wide`] multiplies in
+//! Two formulations compute the same function. `fold_wide` multiplies in
 //! `u128`, which a 64-bit target does with one widening multiply.
-//! [`fold_halves`] builds the product from four 32×32→64 partial products,
+//! `fold_halves` builds the product from four 32×32→64 partial products,
 //! which a 32-bit target (i686, wasm32) does natively instead of calling a
-//! 128-bit multiply routine. [`fold`] picks one per target; both are
-//! compiled everywhere so a test can hold them equal on every target.
+//! 128-bit multiply routine. [`fold`] picks one per target, and tests compile
+//! both to check that they agree.
 
 /// `lo64(a·b) ⊕ hi64(a·b)` through `u128`.
-#[cfg_attr(
-    not(target_pointer_width = "64"),
-    allow(
-        dead_code,
-        reason = "compiled on every target so the tests can compare the two"
-    )
-)]
+#[cfg(any(test, target_pointer_width = "64"))]
 #[inline]
 pub(crate) const fn fold_wide(a: u64, b: u64) -> u64 {
     let product = (a as u128) * (b as u128);
@@ -33,13 +27,7 @@ pub(crate) const fn fold_wide(a: u64, b: u64) -> u64 {
 /// lo(p10)` (at most `3·(2^32 − 1)`, so it cannot overflow). The high word is
 /// `p11 + hi(p01) + hi(p10) + hi(middle)`, which is exact because the whole
 /// product is below `2^128`.
-#[cfg_attr(
-    target_pointer_width = "64",
-    allow(
-        dead_code,
-        reason = "compiled on every target so the tests can compare the two"
-    )
-)]
+#[cfg(any(test, not(target_pointer_width = "64")))]
 #[inline]
 pub(crate) const fn fold_halves(a: u64, b: u64) -> u64 {
     const LOW: u64 = 0xFFFF_FFFF;

@@ -3,7 +3,10 @@
 
 // This module is included by both the benchmark and its correctness test; each
 // target intentionally exercises a different subset of the experiment helpers.
-#![allow(dead_code)]
+#![expect(
+    dead_code,
+    reason = "the benchmark and index tests use different subsets"
+)]
 
 use std::cmp::Ordering;
 

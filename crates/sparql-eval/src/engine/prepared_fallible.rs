@@ -27,7 +27,7 @@ impl NativeSparqlEngine {
     /// Operational failures outrank evaluator diagnostics and governor trips,
     /// discarding partial answers. A ready view returns a typed query diagnostic
     /// or budget exhaustion with certified partial answers and both receipts.
-    #[allow(
+    #[expect(
         clippy::result_large_err,
         reason = "the error carries both operation receipts and certified partial answers"
     )]
@@ -75,7 +75,7 @@ impl NativeSparqlEngine {
     /// Operational failures outrank query errors and exhausted budgets, with all
     /// internal partial answers discarded. Query errors and budget exhaustion keep
     /// their typed outcomes and the combined view/governor evidence.
-    #[allow(
+    #[expect(
         clippy::result_large_err,
         reason = "the error carries both operation receipts and certified partial answers"
     )]
@@ -102,7 +102,7 @@ impl NativeSparqlEngine {
     }
 
     /// The admitted prepared boundary, with reporting owned by its public entry.
-    #[allow(
+    #[expect(
         clippy::result_large_err,
         reason = "the shared boundary preserves the public entry's paired receipts and partial answers"
     )]
@@ -155,7 +155,7 @@ impl NativeSparqlEngine {
     /// # Errors
     /// Returns the same typed errors and operational failure precedence as
     /// [`Self::query_prepared_governed_fallible_view`].
-    #[allow(
+    #[expect(
         clippy::result_large_err,
         reason = "the error carries both operation receipts and certified partial answers"
     )]
@@ -191,7 +191,7 @@ impl NativeSparqlEngine {
     /// # Errors
     /// Returns the same typed errors and publication guarantees as
     /// [`Self::query_prepared_governed_fallible_in_operation`].
-    #[allow(
+    #[expect(
         clippy::result_large_err,
         reason = "the error carries both operation receipts and certified partial answers"
     )]
@@ -221,7 +221,7 @@ impl NativeSparqlEngine {
 }
 
 /// Sample the ingress checkpoint once, pairing its root cause with governor use.
-#[allow(
+#[expect(
     clippy::result_large_err,
     reason = "the checkpoint preserves the public entry's typed paired receipts"
 )]

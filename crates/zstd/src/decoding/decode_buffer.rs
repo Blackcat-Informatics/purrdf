@@ -276,7 +276,6 @@ impl<B: BufferBackend> DecodeBuffer<B> {
     /// `BufferBackend::SUPPORTS_INLINE_SEQUENCE_EXEC = true` dispatch
     /// site.
     #[inline]
-    #[allow(dead_code)]
     pub(crate) fn buffer_mut(&mut self) -> &mut B {
         &mut self.buffer
     }

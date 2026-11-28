@@ -1,10 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API, so the workspace `missing_docs` lint is
-// not asked of their items.
-#![allow(missing_docs)]
-
 //! The per-row cost of a `FILTER` or `BIND` expression, over 100 000 rows.
 //!
 //! Every case is a single triple pattern — one scan, no join — followed by one

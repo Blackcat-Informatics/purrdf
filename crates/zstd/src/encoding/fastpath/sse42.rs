@@ -15,7 +15,6 @@
 //! so we use 16-byte SSE2 vectors for the prefix-length scan.
 
 #![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#![allow(dead_code)]
 
 #[cfg(target_arch = "x86")]
 use core::arch::x86::{__m128i, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8};
@@ -26,8 +25,6 @@ use core::arch::x86_64::{
 
 use super::scalar;
 
-pub(crate) const KERNEL_TAG: &str = "sse42";
-
 /// SSE4.2 `_mm_crc32_u64`-accelerated `hash_mix_u64`. Mirror of the upstream zstd
 /// CRC-folded hash mix used by Dfast/Row hash compute. `_mm_crc32_u64` is
 /// only available in 64-bit mode.
@@ -35,7 +32,7 @@ pub(crate) const KERNEL_TAG: &str = "sse42";
 #[target_feature(enable = "sse4.2")]
 #[inline]
 pub(crate) unsafe fn hash_mix_u64(value: u64) -> u64 {
-    let crc = unsafe { _mm_crc32_u64(0, value) };
+    let crc = _mm_crc32_u64(0, value);
     ((crc << 32) ^ value.rotate_left(13)).wrapping_mul(scalar::HASH_MIX_PRIME)
 }
 
@@ -61,8 +58,8 @@ pub(crate) unsafe fn prefix_len_simd(lhs: *const u8, rhs: *const u8, max: usize)
     while off + 16 <= max {
         let a: __m128i = unsafe { _mm_loadu_si128(lhs.add(off).cast::<__m128i>()) };
         let b: __m128i = unsafe { _mm_loadu_si128(rhs.add(off).cast::<__m128i>()) };
-        let eq = unsafe { _mm_cmpeq_epi8(a, b) };
-        let mask = unsafe { _mm_movemask_epi8(eq) } as u32;
+        let eq = _mm_cmpeq_epi8(a, b);
+        let mask = _mm_movemask_epi8(eq) as u32;
         if mask != 0xFFFF {
             return off + (!mask).trailing_zeros() as usize;
         }

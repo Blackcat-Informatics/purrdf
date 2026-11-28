@@ -31,6 +31,10 @@ use purrdf_gts::writer::Writer;
 use purrdf_hash::error::{ErrorValue, StructuredError};
 use purrdf_testkit::error_capture::Capture;
 
+#[expect(
+    dead_code,
+    reason = "this test uses only one of the two shared triple-term forms"
+)]
 #[path = "support/reifier_terms.rs"]
 mod reifier_terms;
 use reifier_terms::indirect_triple_term;

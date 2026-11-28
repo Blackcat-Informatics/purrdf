@@ -444,7 +444,10 @@ pub(crate) fn mean_inner(
 // noder's inner loop, which runs once per segment pair, so boxing would convert a
 // stack move into a heap allocation on every collinear overlap in exchange for
 // shrinking a leaf function's stack frame. The allow is scoped to this one type.
-#[allow(clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the variants return exact intersection data without allocating a wrapper"
+)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SegmentIntersection {
     /// They do not meet at all.

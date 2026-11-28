@@ -6,8 +6,6 @@
 //! implementation is loaded. Empirical agreement is distinct from residual and
 //! coordinate-error certificates; it supplies no surveying accuracy claim.
 
-#![allow(missing_docs)]
-
 use std::io::{self, Read};
 use std::time::Instant;
 

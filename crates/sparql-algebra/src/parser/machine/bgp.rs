@@ -7,9 +7,12 @@ use crate::algebra::GraphPattern;
 use crate::ast::TriplePattern;
 
 /// A parser operand. Only a mergeable group of triples may defer its public algebra.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "keep the existing inline algebra in the admitted group frame without a separate allocation"
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        clippy::large_enum_variant,
+        reason = "keep the existing inline algebra in the admitted group frame without a separate allocation"
+    )
 )]
 pub(super) enum Pattern {
     Algebra(GraphPattern),

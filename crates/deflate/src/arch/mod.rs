@@ -31,12 +31,24 @@ pub(crate) struct VectorKernels {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[expect(
+    unsafe_code,
+    reason = "x86 SIMD kernels require checked target features"
+)]
 mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
+#[expect(
+    unsafe_code,
+    reason = "AArch64 SIMD kernels require checked target features"
+)]
 mod aarch64;
 
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+#[expect(
+    unsafe_code,
+    reason = "WebAssembly SIMD uses proven unaligned vector accesses"
+)]
 mod wasm32;
 
 #[cfg(target_arch = "x86_64")]

@@ -270,7 +270,7 @@ pub fn validate_changes_to_sarif_string(
 ///
 /// Everything [`validate_changes_to_sarif_string`] refuses, and [`ShapesError::Invalid`]
 /// for a `shapes_graph` that names no graph.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the change path's three documents, the shapes document's two IRIs, the \
               options and the import table are each an independent input"
@@ -366,7 +366,7 @@ pub fn validate_to_sarif_string_with_xpath_regex(
 /// # Errors
 ///
 /// As [`validate_to_sarif_string_with_xpath_regex`], over the change path's documents.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the change path's inputs and the selected law are each an independent input"
 )]
@@ -418,7 +418,7 @@ pub fn validate_changes_to_sarif_string_with_xpath_regex(
 /// over `imports` with the MUTATED data graph's `sh:shapesGraph` links folded in,
 /// carrying the request's validation options. Both change entries, under either law,
 /// validate exactly these.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the change path's three documents, the shapes document's two IRIs, the \
               options and the import table are each an independent input"

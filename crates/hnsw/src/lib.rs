@@ -1191,7 +1191,7 @@ mod tests {
 
     fn fixture_f32(rows: usize, dims: usize) -> VectorMatrix {
         let wide = fixture(rows, dims);
-        #[allow(
+        #[expect(
             clippy::cast_possible_truncation,
             reason = "the fixture is narrowed on purpose, to exercise the binary32 storage path"
         )]

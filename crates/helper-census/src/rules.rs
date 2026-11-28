@@ -1138,7 +1138,7 @@ fn g() {
     }
 
     #[test]
-    #[allow(
+    #[expect(
         clippy::literal_string_with_formatting_args,
         reason = "the fixture is Rust source holding format strings, not a format string"
     )]

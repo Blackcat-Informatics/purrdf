@@ -35,6 +35,7 @@ fn config(analyzer: Analyzer) -> TextIndexConfig {
     )
     .expect("explicit configuration")
 }
+#[expect(dead_code, reason = "this target uses a subset of the shared fixtures")]
 #[path = "support/index.rs"]
 mod index_fixture;
 

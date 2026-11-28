@@ -612,7 +612,10 @@ fn validate_grid(
 /// # Errors
 ///
 /// Uses [`PreparedGeodesic::direct`]'s domain, numerical and resource contract.
-#[allow(clippy::needless_pass_by_value)] // Owned convenience API; prepared methods borrow inputs.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "owned convenience API; prepared methods borrow inputs"
+)]
 pub fn direct(start: LonLat, azimuth: Rat, length: Metres) -> Result<DirectResult, GeoError> {
     let mut context = MetricContext::wgs84()?;
     PreparedGeodesic::new(context.reference().clone()).direct(
@@ -623,7 +626,10 @@ pub fn direct(start: LonLat, azimuth: Rat, length: Metres) -> Result<DirectResul
     )
 }
 
-#[allow(clippy::too_many_arguments)] // Original line inputs and separate restricted observer/scratch capabilities.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "original line inputs and separate restricted observer/scratch capabilities"
+)]
 fn propagate(
     start: &LonLat,
     azimuth: &Rat,
@@ -653,7 +659,10 @@ fn propagate(
     )
 }
 
-#[allow(clippy::too_many_arguments)] // Certified line inputs and separate restricted scratch/observer capabilities.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "certified line inputs and separate restricted scratch/observer capabilities"
+)]
 fn propagate_enclosed(
     start: &LonLat,
     azimuth: &FixedInterval,

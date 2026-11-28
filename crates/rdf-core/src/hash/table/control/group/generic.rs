@@ -49,7 +49,10 @@ pub(crate) struct Group(GroupWord);
 // little-endian just before creating a BitMask. The can potentially
 // enable the compiler to eliminate unnecessary byte swaps if we are
 // only checking whether a BitMask is empty.
-#[expect(clippy::use_self)]
+#[expect(
+    clippy::use_self,
+    reason = "the word-group constructor and nested alignment holder name the group explicitly"
+)]
 impl Group {
     /// Number of bytes in the group.
     pub(crate) const WIDTH: usize = size_of::<Self>();

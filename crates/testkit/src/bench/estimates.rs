@@ -265,7 +265,6 @@ impl CountReport {
         quoted(&context.boundary)?;
         // The raw integer totals are retained alongside the floating-point
         // statistical projection, so rounding never replaces the measured count.
-        #[allow(clippy::cast_precision_loss)]
         let samples = raw_samples
             .iter()
             .map(|sample| *sample as f64 / context.work as f64)

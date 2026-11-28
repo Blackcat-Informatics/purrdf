@@ -510,7 +510,7 @@ impl ViewOp for ExplainOp<'_> {
 
 /// Emit a SPARQL result to stdout, dispatching on the result shape × format kind, and
 /// surface the loss ledger the emission produced.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "each parameter is a distinct, independently-named input; bundling them into a \
               struct would not shrink the call sites, which already name every field"
@@ -730,7 +730,7 @@ fn refuse_uncarriable_named_graphs<D: DatasetView>(
 /// observable binding — which is the one thing the regime's witness filtration exists to
 /// prevent, and the one place it cannot reach. Every other regime, and every OWL-Direct
 /// run that mints no witness, answers.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "each parameter is a distinct, independently-named input (the engine, the \
               dataset, the query text/base, the resolved entailment plan, the governors, \

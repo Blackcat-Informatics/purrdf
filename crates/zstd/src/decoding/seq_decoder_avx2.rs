@@ -22,8 +22,7 @@
 //!
 //! BitReader pinned to `Avx2Kernel`; triple-bit extract goes directly
 //! through `peek_bits_triple_bmi2` (`_pext_u64` inline at every callsite).
-//! Match copy routes to `BufferBackend::exec_sequence_inline_avx2`
-//! (32-byte ymm wildcopy).
+//! The inlined match copy uses 32-byte AVX2 vectors.
 
 #![cfg(target_arch = "x86_64")]
 
@@ -341,7 +340,6 @@ macro_rules! execute_one_body {
 /// The dispatcher in `decode_and_execute_sequences` gates this on
 /// `detect_cpu_kernel() == Avx2`.
 #[target_feature(enable = "bmi2,avx2")]
-#[allow(clippy::too_many_lines)]
 pub(crate) unsafe fn decode_and_execute_sequences_avx2<'fse, B: BufferBackend>(
     section: &SequencesHeader,
     source: &[u8],

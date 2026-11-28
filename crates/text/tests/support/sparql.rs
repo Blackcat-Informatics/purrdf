@@ -4,17 +4,13 @@
 //! Evaluating a query with the text relations in scope, and rendering its
 //! answer cells in an exact, unambiguous textual form.
 
-// The module is included into more than one integration-test binary, and no single binary
-// uses every helper; an unused-here helper is used there.
-#![allow(dead_code, unreachable_pub)]
-
 use purrdf_core::{RdfDataset, SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::{
     ExtensionEnv, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
 };
 
 /// One answer cell in an exact, unambiguous textual form.
-pub fn render(cell: Option<&TermValue>) -> String {
+pub(crate) fn render(cell: Option<&TermValue>) -> String {
     match cell {
         None => "UNBOUND".to_owned(),
         Some(TermValue::Iri(iri)) => format!("<{iri}>"),
@@ -41,7 +37,7 @@ pub fn render(cell: Option<&TermValue>) -> String {
 }
 
 /// The solution rows of `result`, rendered.
-pub fn solutions(result: &SparqlResult) -> Vec<Vec<String>> {
+pub(crate) fn solutions(result: &SparqlResult) -> Vec<Vec<String>> {
     let SparqlResult::Solutions { rows, .. } = result else {
         panic!("a SELECT answers with solutions, got {result:?}");
     };
@@ -51,7 +47,7 @@ pub fn solutions(result: &SparqlResult) -> Vec<Vec<String>> {
 }
 
 /// Evaluate `query` against `dataset` with `relations` in scope, rendered.
-pub fn answer(
+pub(crate) fn answer(
     dataset: &RdfDataset,
     relations: &PropertyFunctionRegistry<'_>,
     query: &str,
@@ -74,11 +70,11 @@ pub fn answer(
 }
 
 /// A typed literal cell as [`render`] writes it.
-pub fn typed(lexical: &str, datatype: &str) -> String {
+pub(crate) fn typed(lexical: &str, datatype: &str) -> String {
     format!("{lexical:?}^^<{datatype}>")
 }
 
 /// An IRI cell under the fixture namespace, as [`render`] writes it.
-pub fn subject(local: &str) -> String {
+pub(crate) fn subject(local: &str) -> String {
     format!("<http://example.org/{local}>")
 }

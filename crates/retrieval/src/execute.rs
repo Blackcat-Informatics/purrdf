@@ -1719,8 +1719,11 @@ impl<'d> RankedStreamImpl<'d> {
     /// [`ProtocolError::AttestationMoved`] when that witness cannot be one
     /// attestation — the index the read served from moved under it — naming the
     /// count the rule refused.
-    // Synchronous for the reason `next` is.
-    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "native settlement is synchronous but the public stream protocol is awaited"
+    )]
     #[expect(
         clippy::future_not_send,
         reason = "an on-demand read shares its candidate index with the stratum's \
@@ -1790,9 +1793,11 @@ impl<'d> RankedStreamImpl<'d> {
     /// answered as [`ExclusionVerdict::Possible`]: see
     /// [`RankedStream::exclusion`](crate::RankedStream::exclusion) for why a
     /// failed measurement must not wear that costume.
-    // Synchronous for the reason `next` is: the evaluator behind it is
-    // synchronous, and the `async` shape is the fusion stage's protocol.
-    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "native exclusion lookup is synchronous but the public stream protocol is awaited"
+    )]
     #[expect(
         clippy::future_not_send,
         reason = "an on-demand read shares its candidate index with the stratum's \
@@ -1818,10 +1823,11 @@ impl<'d> RankedStreamImpl<'d> {
     ///
     /// A [`ProtocolError`] if the stream cannot describe its own rows; this
     /// materialized stream never raises one.
-    // The body is synchronous because the evaluator materializes its rows before
-    // returning; the `async` shape is the ranked-stream contract the fusion stage
-    // consumes, and a caller may compose it with genuinely asynchronous streams.
-    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "the native row pull shares the public async contract with other producers"
+    )]
     #[expect(
         clippy::future_not_send,
         reason = "an on-demand read shares its candidate index with the stratum's \
@@ -1925,7 +1931,11 @@ impl<'d> RankedStreamImpl<'d> {
     /// [`ProtocolError::NeverEndingSource`] when called before the stream was
     /// drained, because a completeness claim from a partially read stream is
     /// exactly the falsifiable status the protocol forbids.
-    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "callers await the same receipt protocol on native and asynchronous streams"
+    )]
     #[expect(
         clippy::future_not_send,
         reason = "an on-demand read shares its candidate index with the stratum's \
@@ -1995,10 +2005,9 @@ impl<'d> RankedStreamImpl<'d> {
 // would force every caller's view — and its statistics and environment, through
 // `search` — to be `Send` for a future that is awaited in one task and never
 // crosses a thread boundary. `search` carries the same reasoning.
-#[allow(
-    clippy::unused_async,
-    clippy::unused_async_trait_impl,
-    clippy::future_not_send
+#[expect(
+    clippy::future_not_send,
+    reason = "the executor accepts borrowed state that need not move between tasks"
 )]
 pub async fn execute<
     'd,
@@ -2044,12 +2053,9 @@ pub async fn execute<
 /// [`ExecutionError::RowBoundBreached`] — the last two only for a materialised read;
 /// an on-demand read reports the same two facts when it reaches them, through its
 /// stream ([`ProtocolError::AttestationMoved`], [`ProtocolError::ReadFailed`]).
-// The same three allowances [`execute`] carries, for the same reasons; this is
-// the body that function delegates to.
-#[allow(
-    clippy::unused_async,
-    clippy::unused_async_trait_impl,
-    clippy::future_not_send
+#[expect(
+    clippy::future_not_send,
+    reason = "the executor accepts borrowed state that need not move between tasks"
 )]
 pub async fn execute_within<
     'd,
@@ -2096,7 +2102,10 @@ pub(crate) fn execute_read_within<'d, D: DatasetView + Sync, C: CompiledRead>(
 ///
 /// # Errors
 /// Preserves binding/source failures and the ordinary executor's whole-run gates.
-#[allow(clippy::unused_async, clippy::future_not_send)]
+#[expect(
+    clippy::future_not_send,
+    reason = "scope evidence remains borrowed by the task that evaluates it"
+)]
 pub async fn execute_scoped_within<
     'd,
     D: DatasetView<ReadError = std::convert::Infallible> + Sync,

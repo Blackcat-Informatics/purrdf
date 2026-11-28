@@ -233,7 +233,10 @@ pub(crate) struct Cli {
     // three states are: absent / present-bare / present-with-value); it is the
     // only place this shape appears — `Cli::ledger_target` projects it into the
     // self-documenting `LedgerTarget` the pipeline actually threads.
-    #[allow(clippy::option_option)]
+    #[expect(
+        clippy::option_option,
+        reason = "the command distinguishes an absent switch, an implied destination, and an explicit path"
+    )]
     #[arg(
         long,
         global = true,
@@ -316,10 +319,6 @@ impl ReportTarget {
     /// A free function over the flag rather than a method on [`Cli`], because `--report` is
     /// carried by the three subcommands that can reason rather than globally by the root
     /// command.
-    #[allow(
-        clippy::option_option,
-        reason = "clap's encoding of an optional-value flag; this is the one place it is decoded"
-    )]
     pub(crate) fn decode(flag: Option<&Option<PathBuf>>) -> Self {
         match flag {
             None => Self::Silent,
@@ -585,7 +584,10 @@ pub(crate) enum Command {
         max_term_arena_bytes: Option<u64>,
         /// Surface the reasoning certificate: bare writes it to stderr,
         /// `--report=PATH` writes it to PATH.
-        #[allow(clippy::option_option)]
+        #[expect(
+            clippy::option_option,
+            reason = "the command distinguishes an absent switch, an implied destination, and an explicit path"
+        )]
         #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
         report: Option<Option<PathBuf>>,
         /// Input format override for the premise, the conclusion and every
@@ -962,7 +964,10 @@ pub(crate) struct ConvertArgs {
     pub rules: Option<PathBuf>,
     /// Surface the reasoning report for `--entailment`: bare writes it to
     /// stderr, `--report=PATH` writes it to PATH. Requires `--entailment`.
-    #[allow(clippy::option_option)]
+    #[expect(
+        clippy::option_option,
+        reason = "the command distinguishes an absent switch, an implied destination, and an explicit path"
+    )]
     #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
     pub report: Option<Option<PathBuf>>,
     /// Permit exactly `N` facts in each evaluation store — one per graph of the input,
@@ -1018,7 +1023,10 @@ pub(crate) struct ConvertArgs {
 // The arguments of the `Query` subcommand, kept out of the enum so the
 // derive-generated builder functions stay small in an unoptimized build.
 // Each bool is an independent command-line switch, not a state machine.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each command-line switch controls an independent setting"
+)]
 #[derive(clap::Args, Debug)]
 pub(crate) struct QueryArgs {
     /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
@@ -1056,7 +1064,10 @@ pub(crate) struct QueryArgs {
     pub rules: Option<PathBuf>,
     /// Surface the reasoning report for `--entailment`: bare writes it to
     /// stderr, `--report=PATH` writes it to PATH. Requires `--entailment`.
-    #[allow(clippy::option_option)]
+    #[expect(
+        clippy::option_option,
+        reason = "the command distinguishes an absent switch, an implied destination, and an explicit path"
+    )]
     #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
     pub report: Option<Option<PathBuf>>,
     /// An `owl:imports` the data declares, resolved to a local document:
@@ -1378,7 +1389,10 @@ pub(crate) struct ReasonArgs {
     pub rules: Option<PathBuf>,
     /// Surface the reasoning report: bare writes it to stderr,
     /// `--report=PATH` writes it to PATH.
-    #[allow(clippy::option_option)]
+    #[expect(
+        clippy::option_option,
+        reason = "the command distinguishes an absent switch, an implied destination, and an explicit path"
+    )]
     #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
     pub report: Option<Option<PathBuf>>,
     /// Permit exactly `N` facts in each evaluation store — one per graph of the input,
@@ -1585,7 +1599,10 @@ pub(crate) struct LiftArgs {
 // derive-generated builder functions stay small in an unoptimized build.
 // Each bool is an independent command-line switch, not a state machine; the fields
 // were already these switches when they sat inline in the enum variant.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each command-line switch controls an independent setting"
+)]
 #[derive(clap::Args, Debug)]
 pub(crate) struct ValidateArgs {
     /// Independent YAML-LD Basic options for one declared RDF import; repeatable.
@@ -2132,7 +2149,10 @@ pub(crate) struct RulesArgs {
     /// whole graph — every rule but a global SPARQL rule whose query is a conjunctive
     /// pattern — lists none), or `  data-block` for a SPARQL 1.2 RL data-block
     /// triple. Terms are N-Triples 1.2, with the blank-node labels of the evaluation.
-    #[allow(clippy::option_option)]
+    #[expect(
+        clippy::option_option,
+        reason = "the command distinguishes an absent switch, an implied destination, and an explicit path"
+    )]
     #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
     pub explain: Option<Option<PathBuf>>,
     /// Permit exactly `N` evaluation rounds that infer a term the evaluation graph did

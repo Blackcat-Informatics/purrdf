@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-#![allow(missing_docs)]
-
 //! One-shot allocation probes for flat canonical output and the digest entries.
 //!
 //! `cargo bench -p purrdf-rdf --bench flat_view_canon_alloc`. Separate from the

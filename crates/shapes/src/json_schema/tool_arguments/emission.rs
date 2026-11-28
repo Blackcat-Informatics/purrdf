@@ -147,6 +147,10 @@ pub(in crate::json_schema) fn array(
     }
 }
 
+#[expect(
+    unused_macro_rules,
+    reason = "the literal grammar keeps all JSON value forms while charging each emitted node"
+)]
 macro_rules! emitted_json {
     // ── Array elements, accumulated as `expr,` ──────────────────────────
     (@array $ctx:expr; [$($elems:expr,)*]) => {

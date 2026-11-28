@@ -7,8 +7,6 @@
 //! COSE_Sign1 `Sig_structure` sized messages (a few hundred bytes each) signed
 //! by four keys, verified in a row. Report-only; not a gate.
 
-#![allow(missing_docs)] // a bench target is not public API
-
 use std::hint::black_box;
 
 use purrdf_ed25519::{Signature, SigningKey, VerifyingKey};

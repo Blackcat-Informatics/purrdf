@@ -13,15 +13,12 @@
 //! ABI rules.
 
 #![cfg(all(target_arch = "aarch64", target_endian = "little"))]
-#![allow(dead_code)]
 
 use core::arch::aarch64::{
     __crc32d, uint8x16_t, vceqq_u8, vgetq_lane_u64, vld1q_u8, vreinterpretq_u64_u8,
 };
 
 use super::scalar;
-
-pub(crate) const KERNEL_TAG: &str = "neon";
 
 /// AArch64 `crc32d`-accelerated `hash_mix_u64`. Routes a full 64-bit lane
 /// through the CRC unit and folds the result back with a rotated copy of the

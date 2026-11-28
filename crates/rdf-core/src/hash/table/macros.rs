@@ -4,7 +4,10 @@
 // in crates/rdf-core/src/hash/table/NOTICE and PROVENANCE.md.
 
 // See the cfg-if crate.
-#[expect(unused_macro_rules)]
+#[expect(
+    unused_macro_rules,
+    reason = "cfg-if handles both forms even though callers on this target select one form"
+)]
 macro_rules! cfg_if {
     // match if/else chains with a final `else`
     ($(

@@ -39,7 +39,6 @@ use alloc::vec::Vec;
 // optional XXH64 checksum out-params push the arg count past the lint's
 // threshold. Bundling them into a struct would diverge from the established
 // emit-fn shape for no readability gain.
-#[allow(clippy::too_many_arguments)]
 #[inline]
 pub(crate) fn compress_block_encoded<M: Matcher>(
     state: &mut CompressState<M>,
@@ -200,7 +199,10 @@ pub(crate) fn compress_block_encoded<M: Matcher>(
 /// copy) and that raw/RLE bodies are emitted straight from `block`. The
 /// `Level(16..=22)` post-split branch is unreachable here (the borrowed
 /// path is gated to Fast levels), so it is omitted.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the block emitter takes explicit source bounds, independent table state, and frame output"
+)]
 pub(crate) fn compress_block_encoded_borrowed(
     state: &mut CompressState<MatchGeneratorDriver>,
     compression_level: CompressionLevel,

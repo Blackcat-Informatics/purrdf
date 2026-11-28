@@ -146,7 +146,10 @@ fn fixture_env<'a>(
 /// exists to prevent — instead of against the pipeline a caller can write.
 // The manual composition mirrors `search`, including its single-task,
 // runtime-agnostic future; see the same allow on `search` itself.
-#[allow(clippy::future_not_send)]
+#[expect(
+    clippy::future_not_send,
+    reason = "the fixture awaits its operations on one task and retains local producer state"
+)]
 async fn manual_composition(
     request: &RetrievalRequest,
     registry: &PropertyFunctionRegistry<'static>,

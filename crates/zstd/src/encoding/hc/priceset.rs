@@ -60,7 +60,10 @@ unsafe fn priceset_improved_mask8_avx2(next_cost: &[u32; 8], node_price: &[u32])
 /// for one match length — the exact `add_prices` chain the scalar loop uses,
 /// so the SoA vector path stays byte-identical.
 #[inline(always)]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the price recurrence borrows each optimizer array independently and shares its bounds across kernels"
+)]
 fn priceset_next_cost(
     profile: HcOptimalCostProfile,
     stats: &HcOptState,
@@ -88,17 +91,17 @@ fn priceset_next_cost(
 /// `#[inline]` so it folds into each per-tier optimal-parser monomorphisation
 /// (no call overhead). Returns the highest written `next`.
 #[inline]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the price recurrence borrows each optimizer array independently and shares its bounds across kernels"
+)]
 // Used by the scalar / sse42 DP wrappers; on aarch64 the dispatch only reaches
 // the neon wrapper and on wasm+simd128 only the simd128 wrapper, so this is
 // cfg-dead on those targets.
-#[cfg_attr(
-    any(
-        all(target_arch = "aarch64", target_endian = "little"),
-        all(target_arch = "wasm32", target_feature = "simd128")
-    ),
-    allow(dead_code)
-)]
+#[cfg(not(any(
+    all(target_arch = "aarch64", target_endian = "little"),
+    all(target_arch = "wasm32", target_feature = "simd128")
+)))]
 pub(crate) fn priceset_range_nonabort_scalar(
     node_prices: &mut [u32],
     nodes: &mut [HcOptimalNode],
@@ -150,19 +153,19 @@ pub(crate) fn priceset_range_nonabort_scalar(
 /// scalar-scatter on the improving lanes (1-8% of compares, per the
 /// improve-ratio probe). Same signature tail as the scalar variant.
 #[inline(always)]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the price recurrence borrows each optimizer array independently and shares its bounds across kernels"
+)]
 // Instantiated only by a vector tier wrapper (avx2/sse4.1 on x86, neon on
 // aarch64, simd128 on wasm+simd128); a target with none of those (e.g.
 // wasm without +simd128) uses only the scalar range, leaving this generic dead.
-#[cfg_attr(
-    not(any(
-        target_arch = "x86",
-        target_arch = "x86_64",
-        all(target_arch = "aarch64", target_endian = "little"),
-        all(target_arch = "wasm32", target_feature = "simd128")
-    )),
-    allow(dead_code)
-)]
+#[cfg(any(
+    target_arch = "x86",
+    target_arch = "x86_64",
+    all(target_arch = "aarch64", target_endian = "little"),
+    all(target_arch = "wasm32", target_feature = "simd128")
+))]
 fn priceset_range_vec<const W: usize>(
     node_prices: &mut [u32],
     nodes: &mut [HcOptimalNode],
@@ -322,7 +325,10 @@ unsafe fn priceset_cached_prices8_avx2(cells: &[[u32; 2]], stamp: u32) -> Option
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "avx2")]
 #[inline]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the price recurrence borrows each optimizer array independently and shares its bounds across kernels"
+)]
 pub(crate) unsafe fn priceset_range_nonabort_avx2(
     node_prices: &mut [u32],
     nodes: &mut [HcOptimalNode],
@@ -405,7 +411,10 @@ unsafe fn priceset_improved_mask4_neon(next_cost: &[u32; 4], node_price: &[u32])
 #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
 #[target_feature(enable = "neon")]
 #[inline]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the price recurrence borrows each optimizer array independently and shares its bounds across kernels"
+)]
 pub(crate) unsafe fn priceset_range_nonabort_neon(
     node_prices: &mut [u32],
     nodes: &mut [HcOptimalNode],
@@ -510,7 +519,10 @@ unsafe fn priceset_improved_mask4_sse41(next_cost: &[u32; 4], node_price: &[u32]
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "sse4.2")]
 #[inline]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the price recurrence borrows each optimizer array independently and shares its bounds across kernels"
+)]
 pub(crate) unsafe fn priceset_range_nonabort_sse41(
     node_prices: &mut [u32],
     nodes: &mut [HcOptimalNode],
@@ -592,7 +604,10 @@ unsafe fn priceset_improved_mask4_simd128(next_cost: &[u32; 4], node_price: &[u3
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 #[target_feature(enable = "simd128")]
 #[inline]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the price recurrence borrows each optimizer array independently and shares its bounds across kernels"
+)]
 pub(crate) unsafe fn priceset_range_nonabort_simd128(
     node_prices: &mut [u32],
     nodes: &mut [HcOptimalNode],

@@ -176,7 +176,7 @@ impl Default for ReadLabellingLimits {
 /// A GTS file decoded into the graph model of its generation.
 #[derive(Debug)]
 #[non_exhaustive]
-#[allow(
+#[expect(
     clippy::large_enum_variant,
     reason = "the public variants return their graph by value without an extra allocation"
 )]

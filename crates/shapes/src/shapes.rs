@@ -1142,7 +1142,7 @@ impl ModelOwner {
 }
 
 /// The parsed shapes graph — a collection of top-level [`Shape`]s.
-#[allow(
+#[expect(
     clippy::struct_field_names,
     reason = "field names mirror the public Shapes API contract (shapes_graph / shapes_dataset)"
 )]

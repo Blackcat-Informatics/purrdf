@@ -926,7 +926,10 @@ fn try_fold_nested_buffered<N: Copy, C: ?Sized, T, E, B: FoldBuffers<N, T>>(
             .expect("the root's answer is the last one assembled"))
     })();
     // Retain the original backing allocation for exact scratch release.
-    #[allow(clippy::iter_with_drain)]
+    #[expect(
+        clippy::iter_with_drain,
+        reason = "retain the answers allocation for exact scratch release"
+    )]
     for answer in answers.drain(..) {
         discard_answer(ctx, answer, buffers);
     }

@@ -9,7 +9,8 @@
 use std::fmt::Write as _;
 
 mod support;
-use support::{code, run, stderr_utf8 as stderr, stdout_utf8 as stdout, write_file};
+use purrdf_testkit::text::{stderr_utf8 as stderr, stdout_utf8 as stdout};
+use support::{code, run, write_file};
 
 /// `2^127`, one past `i128::MAX`.
 const PAST_I128: &str = "170141183460469231731687303715884105728";

@@ -52,3 +52,5 @@ downstream consumers do not depend on a root-only registry patch.
 The finite frame-sequence reader reuses the streaming block decoder while
 advancing through concatenated and skippable frames. It verifies checksums and
 reapplies the declared dictionary without retaining the complete decoded output.
+The stream and slice decoders share the reserved-bit check required by
+[RFC 8878, section 3.1.1.1.1.4](https://www.rfc-editor.org/rfc/rfc8878.html#section-3.1.1.1.1.4).

@@ -1499,7 +1499,7 @@ fn nonnegative_bound(
         && value >= 0.0
         && value.fract() == 0.0
     {
-        #[allow(
+        #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
             clippy::cast_precision_loss,

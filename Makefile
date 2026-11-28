@@ -101,11 +101,22 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	$(MAKE) wasm
 	$(MAKE) wasm-imports
 
+.PHONY: clippy clippy-all
+clippy: ## Lint production library and binary targets with the strict compiler flags.
+	CARGO_ENCODED_RUSTFLAGS='' cargo clippy --workspace --lib --bins --locked -- \
+		-D warnings -D unused -D unreachable-pub -D clippy::allow_attributes \
+		-D clippy::used_underscore_binding -D clippy::needless_pass_by_value \
+		-D clippy::trivially_copy_pass_by_ref -D clippy::redundant_clone
+
+clippy-all: ## Lint all targets, including the independent preserve-order consumer.
+	cargo clippy --workspace --all-targets --locked -- -D warnings
+	cargo clippy --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --all-targets --locked -- -D warnings
+
 workspace-gate: ## Run the compiler and hygiene checks behind the hosted `workspace` result, without the test suite.
 	cargo fmt --all --check
 	cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
-	cargo clippy --workspace --all-targets --locked -- -D warnings
-	cargo clippy --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --all-targets --locked -- -D warnings
+	$(MAKE) clippy
+	$(MAKE) clippy-all
 	cargo check --workspace --lib --tests --locked
 	cargo run -q --locked -p helper-census -- --no-features
 	python3 scripts/check-toolchain-pin.py

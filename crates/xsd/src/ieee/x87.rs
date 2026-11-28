@@ -143,10 +143,6 @@ macro_rules! x87_op {
     ) => {
         $(#[$attr])*
         #[inline(always)]
-        #[allow(
-            clippy::inline_always,
-            reason = "one operation inside a kernel's inner loop"
-        )]
         pub(super) fn $name($($operand: $ty),+) -> $ty {
             x87_op!(@block $ty ; $($operand),+ ; [$($line),+] ;)
         }
@@ -158,10 +154,6 @@ macro_rules! x87_op {
     ) => {
         $(#[$attr])*
         #[inline(always)]
-        #[allow(
-            clippy::inline_always,
-            reason = "one operation inside a kernel's inner loop"
-        )]
         pub(super) fn $name($($operand: $ty),+) -> $ty {
             x87_op!(
                 @block $ty ; $($operand),+ ; [$($line),+] ;

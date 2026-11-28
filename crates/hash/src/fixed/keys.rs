@@ -87,61 +87,40 @@ pub(crate) const LANE_KEY: [u64; 4] = [KEYS[7], KEYS[8], KEYS[9], KEYS[10]];
 pub(crate) const LANE_INIT: [u64; 4] = [KEYS[11], KEYS[12], KEYS[13], KEYS[14]];
 /// The second word's domain offset in a portable two-word absorb.
 pub(crate) const PAIR_X: u64 = KEYS[15];
-/// The AES path's four lane round keys, as `(low, high)` words.
-#[cfg_attr(
-    not(all(
-        any(target_arch = "x86_64", target_arch = "aarch64"),
-        target_endian = "little",
-        target_feature = "aes"
-    )),
-    allow(dead_code)
-)]
-pub(crate) const AES_LANE_KEY: [(u64, u64); 4] = [
-    (KEYS[16], KEYS[17]),
-    (KEYS[18], KEYS[19]),
-    (KEYS[20], KEYS[21]),
-    (KEYS[22], KEYS[23]),
-];
-/// The AES path's four lane initial values, as `(low, high)` words.
-#[cfg_attr(
-    not(all(
-        any(target_arch = "x86_64", target_arch = "aarch64"),
-        target_endian = "little",
-        target_feature = "aes"
-    )),
-    allow(dead_code)
-)]
-pub(crate) const AES_LANE_INIT: [(u64, u64); 4] = [
-    (KEYS[24], KEYS[25]),
-    (KEYS[26], KEYS[27]),
-    (KEYS[28], KEYS[29]),
-    (KEYS[30], KEYS[31]),
-];
-/// The AES path's two merge round keys, as `(low, high)` words.
-#[cfg_attr(
-    not(all(
-        any(target_arch = "x86_64", target_arch = "aarch64"),
-        target_endian = "little",
-        target_feature = "aes"
-    )),
-    allow(dead_code)
-)]
-pub(crate) const AES_MERGE_KEY: [(u64, u64); 2] = [(KEYS[32], KEYS[33]), (KEYS[34], KEYS[35])];
-/// The AES path's four per-lane final round keys, as `(low, high)` words.
-#[cfg_attr(
-    not(all(
-        any(target_arch = "x86_64", target_arch = "aarch64"),
-        target_endian = "little",
-        target_feature = "aes"
-    )),
-    allow(dead_code)
-)]
-pub(crate) const AES_FINAL_KEY: [(u64, u64); 4] = [
-    (KEYS[36], KEYS[37]),
-    (KEYS[38], KEYS[39]),
-    (KEYS[40], KEYS[41]),
-    (KEYS[42], KEYS[43]),
-];
+
+#[cfg(all(
+    any(target_arch = "x86_64", target_arch = "aarch64"),
+    target_endian = "little",
+    target_feature = "aes"
+))]
+pub(super) mod aes {
+    use super::KEYS;
+
+    /// The AES path's four lane round keys, as `(low, high)` words.
+    pub(in crate::fixed) const AES_LANE_KEY: [(u64, u64); 4] = [
+        (KEYS[16], KEYS[17]),
+        (KEYS[18], KEYS[19]),
+        (KEYS[20], KEYS[21]),
+        (KEYS[22], KEYS[23]),
+    ];
+    /// The AES path's four lane initial values, as `(low, high)` words.
+    pub(in crate::fixed) const AES_LANE_INIT: [(u64, u64); 4] = [
+        (KEYS[24], KEYS[25]),
+        (KEYS[26], KEYS[27]),
+        (KEYS[28], KEYS[29]),
+        (KEYS[30], KEYS[31]),
+    ];
+    /// The AES path's two merge round keys, as `(low, high)` words.
+    pub(in crate::fixed) const AES_MERGE_KEY: [(u64, u64); 2] =
+        [(KEYS[32], KEYS[33]), (KEYS[34], KEYS[35])];
+    /// The AES path's four per-lane final round keys, as `(low, high)` words.
+    pub(in crate::fixed) const AES_FINAL_KEY: [(u64, u64); 4] = [
+        (KEYS[36], KEYS[37]),
+        (KEYS[38], KEYS[39]),
+        (KEYS[40], KEYS[41]),
+        (KEYS[42], KEYS[43]),
+    ];
+}
 
 #[cfg(test)]
 mod tests {

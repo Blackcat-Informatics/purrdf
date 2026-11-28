@@ -36,8 +36,13 @@
 //! translation) from `RdfDataset`'s own index-permutation choice, which is already
 //! covered elsewhere and is not a page-admission concern.
 
+#[expect(dead_code, reason = "this test uses one of the two shared fixtures")]
 #[path = "support/paged.rs"]
 mod paged;
+#[expect(
+    dead_code,
+    reason = "this test compares term values rather than complete view rows"
+)]
 #[path = "support/values.rs"]
 mod values;
 use paged::ready_evidence;
@@ -727,7 +732,10 @@ mod fuzz {
     /// pages drops rows just as silently.
     // Eight parameters because the law is stated over exactly the eight inputs
     // `law_inputs` draws, named as the property draws them.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the property receives each generated input independently"
+    )]
     fn paged_quads_for_pattern_matches_linear_scan_over_quads(
         rows: &[Row],
         s_sel: Option<u8>,
@@ -860,7 +868,10 @@ mod fuzz {
     /// trivially enormous "estimate" cannot pass.
     // Eight parameters because the law is stated over exactly the eight inputs
     // `law_inputs` draws, named as the property draws them.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the property receives each generated input independently"
+    )]
     fn paged_cardinality_estimate_upper_bounds_count(
         rows: &[Row],
         s_sel: Option<u8>,

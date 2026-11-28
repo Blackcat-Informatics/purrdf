@@ -1737,7 +1737,10 @@ impl GraphPattern {
 /// reference no term. The set is complete (the full SPARQL 1.1 `BuiltInCall`
 /// surface) so the algebra can subsume any in-corpus call without a fallback.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[allow(missing_docs)] // self-describing 1:1 mappings of SPARQL built-in names
+#[expect(
+    missing_docs,
+    reason = "the variants name the corresponding SPARQL built-ins directly"
+)]
 pub enum Function {
     Str,
     Lang,

@@ -545,9 +545,12 @@ pub struct PreparedPlan<'v, S: Admission = Resident> {
 }
 impl<'v, S: Admission> PreparedPlan<'v, S> {
     /// Consume a frozen snapshot; failure retains it with original local context.
-    #[expect(
-        clippy::result_large_err,
-        reason = "Refusal retains original RDF snapshots inline without allocating on the failure path"
+    #[cfg_attr(
+        target_pointer_width = "64",
+        expect(
+            clippy::result_large_err,
+            reason = "Refusal retains original RDF snapshots inline without allocating on the failure path"
+        )
     )]
     pub fn compile(
         source: DatasetHandle,
@@ -558,9 +561,12 @@ impl<'v, S: Admission> PreparedPlan<'v, S> {
         Self::compile_checked(source, plan, vocab, storage, |_, _, _, _| Ok(()))
     }
 
-    #[expect(
-        clippy::result_large_err,
-        reason = "Refusal retains original RDF snapshots inline without allocating on the failure path"
+    #[cfg_attr(
+        target_pointer_width = "64",
+        expect(
+            clippy::result_large_err,
+            reason = "Refusal retains original RDF snapshots inline without allocating on the failure path"
+        )
     )]
     fn compile_checked(
         source: DatasetHandle,
@@ -639,9 +645,12 @@ impl<'v, S: Admission> PreparedPlan<'v, S> {
     }
     /// Execute against an original RDF term. Result storage is admitted before
     /// matching; no input or result is formatted to cross this boundary.
-    #[expect(
-        clippy::result_large_err,
-        reason = "Refusal retains original RDF snapshots inline without allocating on the failure path"
+    #[cfg_attr(
+        target_pointer_width = "64",
+        expect(
+            clippy::result_large_err,
+            reason = "Refusal retains original RDF snapshots inline without allocating on the failure path"
+        )
     )]
     pub fn execute<W: Admission>(
         self,
@@ -769,9 +778,12 @@ impl<'v, S: Admission, W: Admission> Execution<'v, S, W> {
     }
     /// Stage a self-contained RDF description and RDF 1.2 membership provenance.
     /// The caller supplies the evaluation IRI and an original output account.
-    #[expect(
-        clippy::result_large_err,
-        reason = "Refusal retains original RDF snapshots inline without allocating on the failure path"
+    #[cfg_attr(
+        target_pointer_width = "64",
+        expect(
+            clippy::result_large_err,
+            reason = "Refusal retains original RDF snapshots inline without allocating on the failure path"
+        )
     )]
     pub fn export<O: Admission + Send + Sync + 'static>(
         self,

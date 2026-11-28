@@ -2127,7 +2127,7 @@ fn collect_statistics(
 /// therefore which plan a request is. A `plan` or `compile` call that did not carry
 /// it would report a depth, a `LIMIT` and an identity for a read nobody asked
 /// for.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the three entry points' shared inputs are named, not bundled"
 )]
@@ -3013,7 +3013,7 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
     data_format="turtle",
     base=None,
 ))]
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the pure stage's inputs are named, not bundled"
 )]
@@ -3233,7 +3233,7 @@ fn explain_depth(
     data_format="turtle",
     base=None,
 ))]
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the waist's inputs are named, not bundled"
 )]
@@ -3268,7 +3268,7 @@ fn compile<'py>(
     compile_prepared(py, source, call, weights, k, decay, scale_digits, ordering)
 }
 
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "shared Python entry honors the complete or absent fusion law"
 )]
@@ -3544,7 +3544,7 @@ fn compile_prepared<'py>(
     data_format="turtle",
     base=None,
 ))]
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the ladder's inputs are named, not bundled"
 )]
@@ -3579,7 +3579,7 @@ fn search<'py>(
     search_prepared(py, source, call, weights, k, decay, scale_digits, ordering)
 }
 
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "shared Python entry accepts every explicit fusion-law input"
 )]
@@ -3677,7 +3677,7 @@ impl RetrievalSession {
         request, *, statistics, top_k, weights=None, k=None, decay=None,
         scale_digits=None, ordering=None,
     ))]
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "the fusion law and caller ordering stay explicit request inputs"
     )]
@@ -3709,7 +3709,7 @@ impl RetrievalSession {
     #[pyo3(signature = (
         request, *, weights, statistics, k, decay, scale_digits, top_k, ordering=None,
     ))]
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "the fusion law and caller ordering stay explicit request inputs"
     )]

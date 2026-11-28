@@ -269,7 +269,7 @@ impl PyStore {
         xpath_regex=None, geo=None,
         division=None,
     ))]
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "each engine-configuration axis is named explicitly at the call site, exactly \
                   as on `query`"
@@ -389,7 +389,7 @@ impl PyStore {
     /// 1.2 reifier and annotation rows must survive: `Project` would silently thin the
     /// data on the way out, and a format with no surface for them fails closed instead.
     #[pyo3(signature = (output=None, format=None, *, from_graph=None, jsonld_options=None, jsonld_context=None, yaml_schema_url=None, base=None))]
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "Python dump names graph selection, the document base, and JSON-LD configuration explicitly"
     )]

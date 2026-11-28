@@ -9,8 +9,6 @@
 //! interner case calls the terminal key function. The reported time per
 //! element is one table-lookup hash. Report-only; not a gate.
 
-#![allow(missing_docs)] // a bench target is not public API
-
 use core::hash::{Hash, Hasher};
 use std::hint::black_box;
 

@@ -155,11 +155,11 @@ fn shape_selector(shape: &str) -> ShapeSelector {
 /// no partial report is returned.
 #[pyfunction]
 #[pyo3(signature = (schema, data, map, *, schema_format="shexc", data_format="turtle", base=None, xpath_regex=None, matcher_maximum_states=200_000))]
-#[allow(
+#[expect(
     clippy::needless_pass_by_value,
     reason = "the binding ABI receives owned values"
 )]
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "each validation-request option is named explicitly at the call site"
 )]

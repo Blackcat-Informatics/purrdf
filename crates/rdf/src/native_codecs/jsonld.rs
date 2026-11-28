@@ -2280,12 +2280,6 @@ fn parse(message: impl Into<String>) -> RdfDiagnostic {
 
 #[cfg(test)]
 mod carrier_law_tests {
-    // Brought into scope for `write!` method resolution; a newer toolchain no
-    // longer needs the explicit import, so the unused warning is suppressed
-    // rather than removing an import older toolchains still require.
-    #[allow(unused_imports)]
-    use std::io::Write as _;
-
     use purrdf_lex::json::{self, Object};
     use purrdf_testkit::prop::prelude::*;
 
@@ -2304,10 +2298,9 @@ mod carrier_law_tests {
         let mut sink = TextSink::in_memory();
         {
             let mut output = BoundedJsonOutput::new(&mut sink, ByteLimit::new(4));
-            output.write_all(b"null").expect("exact output boundary");
-            let error = output
-                .write_all(b" ")
-                .expect_err("one byte over output boundary");
+            IoWrite::write_all(&mut output, b"null").expect("exact output boundary");
+            let error =
+                IoWrite::write_all(&mut output, b" ").expect_err("one byte over output boundary");
             assert!(error.to_string().contains("exceeds 4 bytes"));
         }
         // The admitted bytes reached the sink; the refused byte did not.

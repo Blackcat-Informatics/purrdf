@@ -504,7 +504,7 @@ impl CdtValue {
 /// value carries is a function of those contents, so printing it would say nothing
 /// twice. Each element is written by [`CdtTerm`]'s iterative `Debug`
 /// ([`crate::tree`]), so this never recurses however deep the value.
-#[allow(
+#[expect(
     clippy::missing_fields_in_debug,
     reason = "the extent is a function of the printed parts, and printing it would change \
               the bytes every consumer's `{:?}` of a value has always produced"

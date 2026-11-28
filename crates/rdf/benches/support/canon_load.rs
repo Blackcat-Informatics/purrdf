@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-#![allow(missing_docs)]
-
 //! Load-shaped fixtures for the flat canonical document and digest benches.
 //!
 //! Both fixtures are built in memory and shaped so every blank node differs at

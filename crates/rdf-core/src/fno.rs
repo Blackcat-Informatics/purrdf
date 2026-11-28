@@ -117,7 +117,7 @@ impl FnoCatalog {
     /// # Errors
     /// Refuses malformed RDF values, conflicting descriptions and unresolved
     /// references. Indistinguishable duplicate facts are canonicalized once valid.
-    #[allow(
+    #[expect(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -166,7 +166,7 @@ impl FnoCatalog {
     /// assert!(matches!(refused.cause, ControlledError::Control("stopped")));
     /// assert_eq!(refused.input.document_iri, "urn:catalog");
     /// ```
-    #[allow(
+    #[expect(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]

@@ -139,7 +139,10 @@ impl purrdf_hash::error::StructuredError for TransportError {
 /// [`decode_transport`] rather than being read as a plain payload.
 // Matching stays byte-exact on the (already lowercased) name; multi-part suffixes
 // like ".tar.gz" cannot be expressed via Path::extension.
-#[allow(clippy::case_sensitive_file_extension_comparisons)]
+#[expect(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "matching uses an ASCII-lowercased name and can include a multipart suffix"
+)]
 pub fn detect_transport(data: &[u8], source_name: Option<&str>) -> Option<TransportEncoding> {
     if data.starts_with(GZIP_MAGIC) {
         return Some(TransportEncoding::Gzip);
@@ -166,7 +169,6 @@ pub fn detect_transport(data: &[u8], source_name: Option<&str>) -> Option<Transp
 ///
 /// The suffix table is ordered longest-first so `.tar.gz` strips whole rather than
 /// leaving a stray `.tar` behind.
-#[allow(clippy::case_sensitive_file_extension_comparisons)]
 pub fn strip_transport_suffix(name: &str) -> Option<(&str, TransportEncoding)> {
     let lower = name.to_ascii_lowercase();
     [

@@ -1171,11 +1171,6 @@ mod tests {
 
     /// Every shape the writer prints, with the compiler's own `Debug` as the oracle.
     #[derive(Debug)]
-    #[allow(
-        dead_code,
-        reason = "the fields exist to be printed by the derived `Debug`, which dead-code \
-                  analysis does not count as a read"
-    )]
     enum Derived {
         Unit,
         Leaf(u8),

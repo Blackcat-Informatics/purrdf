@@ -24,7 +24,10 @@ pub(super) struct LineState {
 }
 
 impl LineState {
-    #[allow(clippy::too_many_arguments)] // Original line source, immutable equivalent tables and checked scratch.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "original line source, immutable equivalent tables and checked scratch"
+    )]
     pub(super) fn new_with_coefficients(
         start: &LonLat,
         azimuth: &FixedInterval,

@@ -5,10 +5,6 @@
 //! text corpus beside a vector space over the same subjects, its dataset and
 //! text index, and the request that asks both.
 
-// The module is included into more than one integration-test binary, and no single binary
-// uses every helper; an unused-here helper is used there.
-#![allow(dead_code, unreachable_pub)]
-
 use std::sync::Arc;
 
 use purrdf::retrieval::fixture::iri;
@@ -17,37 +13,37 @@ use purrdf::text::{GraphSelector, TextIndex, TextIndexConfig};
 use purrdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 
 /// The one predicate the text corpus is indexed over.
-pub const NOTE: &str = "https://example.org/note";
+pub(crate) const NOTE: &str = "https://example.org/note";
 
 /// The one block both producers declare.
-pub const SHARED_BLOCK: &str = "https://example.org/domain/shared";
+pub(crate) const SHARED_BLOCK: &str = "https://example.org/domain/shared";
 
 /// The needle the text producer is asked for.
-pub const NEEDLE: &str = "alpha beta";
+pub(crate) const NEEDLE: &str = "alpha beta";
 
 /// How many documents the needle reaches, and how many rows the vector space holds.
-pub const CORPUS: usize = 80;
+pub(crate) const CORPUS: usize = 80;
 
-pub fn text_subject(at: usize) -> String {
+pub(crate) fn text_subject(at: usize) -> String {
     format!("https://example.org/doc/text/{at}")
 }
 
-pub fn vector_term(at: usize) -> String {
+pub(crate) fn vector_term(at: usize) -> String {
     format!("https://example.org/doc/vec/{at}")
 }
 
-pub fn kernel_iri(text: &str) -> purrdf::iri::Iri {
+pub(crate) fn kernel_iri(text: &str) -> purrdf::iri::Iri {
     purrdf::iri::parse(text).expect("fixture IRIs are valid")
 }
 
-pub fn shared_block() -> DomainTag {
+pub(crate) fn shared_block() -> DomainTag {
     DomainTag::parse(SHARED_BLOCK).expect("the fixture domain tag is a valid IRI")
 }
 
 /// [`CORPUS`] documents the needle reaches, and one document per vector term whose
 /// text shares no term with it — so a text-side lookup about a vector candidate is a
 /// real dictionary search that finds no posting.
-pub fn text_rows() -> Vec<(String, String)> {
+pub(crate) fn text_rows() -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = (0..CORPUS)
         .map(|at| {
             (
@@ -60,7 +56,7 @@ pub fn text_rows() -> Vec<(String, String)> {
     out
 }
 
-pub fn dataset() -> Arc<RdfDataset> {
+pub(crate) fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let predicate = builder.intern_iri(NOTE).unwrap();
     for (subject, text) in text_rows() {
@@ -71,7 +67,7 @@ pub fn dataset() -> Arc<RdfDataset> {
     builder.freeze().expect("the fixture dataset is valid")
 }
 
-pub fn text_index(dataset: &RdfDataset) -> Arc<TextIndex> {
+pub(crate) fn text_index(dataset: &RdfDataset) -> Arc<TextIndex> {
     let config = TextIndexConfig::new(
         vec![TermValue::iri(NOTE)],
         GraphSelector::Any,
@@ -81,7 +77,7 @@ pub fn text_index(dataset: &RdfDataset) -> Arc<TextIndex> {
     Arc::new(TextIndex::from_dataset(dataset, &config).expect("the fixture index builds"))
 }
 
-pub fn request_terms() -> Vec<RequestTerm> {
+pub(crate) fn request_terms() -> Vec<RequestTerm> {
     vec![
         RequestTerm::Lexical {
             text: NEEDLE.to_owned(),

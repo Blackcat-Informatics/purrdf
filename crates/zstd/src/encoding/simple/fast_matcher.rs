@@ -1840,7 +1840,10 @@ impl FastKernelMatcher {
 /// explicit parameter sidesteps the `&self`-vs-`&mut self.hash_table`
 /// conflict a `&self` accessor would create, the same reason the window
 /// slice is selected by the caller and handed in.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the caller must borrow the history window and mutable match tables independently"
+)]
 fn run_fast_kernel_block(
     history: &[u8],
     block_start: usize,
@@ -1976,7 +1979,10 @@ fn run_fast_kernel_block(
 /// `(mls, use_cmov)` pair to [`compress_block_fast_dict`], threading the
 /// immutable `dict_table` alongside the main table. Emits any terminal tail
 /// literals exactly as the no-dict helper does.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the caller must borrow the history window and mutable match tables independently"
+)]
 fn run_fast_kernel_block_dict(
     history: &[u8],
     block_start: usize,

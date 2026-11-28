@@ -43,7 +43,7 @@ impl ViewOp for ProjectOp<'_> {
 }
 
 /// Run `purrdf project` over a native RDF/pack source.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the CLI dispatcher passes the explicit command fields without hidden defaults"
 )]
@@ -103,7 +103,7 @@ pub(crate) fn run_project(
 }
 
 /// Run `purrdf lift` over a canonical projection USTAR archive.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the CLI dispatcher passes the explicit command fields without hidden defaults"
 )]

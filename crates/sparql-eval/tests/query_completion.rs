@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 // The pre-binding lane is deprecated and inert; these tests still name it.
-#![allow(deprecated)]
+#![expect(
+    deprecated,
+    reason = "these tests exercise the retained compatibility prebinding API and use an atomic operation available at the minimum Rust version"
+)]
 
 //! Generic query publication must include reads after the last algebra node.
 mod support;
@@ -1406,7 +1409,7 @@ const EXPLAIN_ROUTES: [ExplainRoute; 4] = [
     ExplainRoute::QuietStop,
     ExplainRoute::GovernedRequest,
 ];
-#[allow(
+#[expect(
     clippy::result_large_err,
     reason = "test helper preserves the public operational result shared by all three EXPLAIN entries"
 )]
@@ -1938,7 +1941,7 @@ fn assert_supplied_coordinates(coordinates: &purrdf_sparql_eval::QueryCoordinate
 }
 
 /// Select governor ownership while preserving the same plan, source, and publication boundary.
-#[allow(
+#[expect(
     clippy::result_large_err,
     reason = "the test drives both public entries through their unchanged typed reporting boundary"
 )]

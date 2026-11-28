@@ -395,34 +395,6 @@ impl<'s, K: CpuKernel> BitReaderReversed<'s, K> {
         (val1, val2, val3)
     }
 
-    /// BMI2-scoped variant of [`peek_bits`]. The whole body executes
-    /// in `#[target_feature(enable = "bmi2")]` scope, so `_bzhi_u64`
-    /// inlines as a single `bzhi` instruction at the caller site
-    /// instead of crossing the `mask_lower_bits_bmi2_impl` CALL
-    /// boundary.
-    ///
-    /// Use from any caller that is itself `#[target_feature(bmi2)]`-
-    /// scoped and has verified the runtime CPU supports BMI2.
-    ///
-    /// # Safety
-    /// Caller MUST ensure BMI2 is available on the running CPU. The
-    /// `bzhi` instruction faults with #UD on hardware that does not
-    /// advertise BMI2.
-    #[cfg(target_arch = "x86_64")]
-    #[target_feature(enable = "bmi2")]
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) unsafe fn peek_bits_bmi2(&mut self, n: u8) -> u64 {
-        debug_assert!(
-            n == 0 || self.bits_consumed + n <= 64,
-            "peek_bits_bmi2: not enough bits (consumed={}, requested={})",
-            self.bits_consumed,
-            n
-        );
-        let shift_by = (64u8 - self.bits_consumed).wrapping_sub(n);
-        core::arch::x86_64::_bzhi_u64(self.bit_container.wrapping_shr(shift_by as u32), n as u32)
-    }
-
     /// BMI2-scoped variant of [`peek_bits_triple`]. Mirrors the
     /// scalar/K-trait variant but inlines `_pext_u64` directly instead
     /// of crossing the `extract_triple_pext` CALL boundary.

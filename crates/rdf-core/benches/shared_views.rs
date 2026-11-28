@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 // `bench_group!` generates public entry points for this executable only.
-#![allow(missing_docs)]
 
 //! Controlled view/publication comparisons using identical deterministic RDF.
 //! Native and shared paths are checked before timing. Report-only: no winner is

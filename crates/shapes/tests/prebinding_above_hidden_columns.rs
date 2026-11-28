@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 // The pre-binding lane is deprecated and inert; these tests still name it.
-#![allow(deprecated)]
+#![expect(
+    deprecated,
+    reason = "these tests exercise the retained compatibility prebinding API"
+)]
 
 //! Under SHACL pre-binding every expression that reads `$this` reads the focus node —
 //! above a `GROUP BY`, above a sub-`SELECT` whose projection drops `$this`, and beneath

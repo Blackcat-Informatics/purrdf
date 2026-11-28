@@ -349,14 +349,14 @@ fn pattern_shapes_set_equal_source_including_predicate_that_is_also_subject() {
     let graph1 = iri("graph1");
     let graph2 = iri("graph2");
 
-    #[allow(clippy::type_complexity)]
-    let cases: Vec<(
+    type PatternCase = (
         Option<TermValue>,
         Option<TermValue>,
         Option<TermValue>,
         GraphSpec,
-        &str,
-    )> = vec![
+        &'static str,
+    );
+    let cases: Vec<PatternCase> = vec![
         (None, None, None, GraphSpec::Any, "whole scan, any graph"),
         (
             Some(alice.clone()),

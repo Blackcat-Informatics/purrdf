@@ -8,11 +8,12 @@ use std::error::Error;
 
 #[path = "support/holder.rs"]
 mod holder;
-#[allow(
+#[expect(
     dead_code,
     unused_imports,
     unused_macros,
-    reason = "each target uses part of the crate's shared JSON model"
+    unused_macro_rules,
+    reason = "this standalone target uses only part of the crate's shared JSON model"
 )]
 #[path = "../src/json_model.rs"]
 mod json_model;
@@ -475,7 +476,10 @@ fn validates_in(
 
 // Keep each fixture row explicit: schema, projection, compiler mode, independent
 // source classification, and located-loss expectation are separate oracle inputs.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the oracle compares independent source, projection, and lost-constraint evidence"
+)]
 fn probe(
     schema: &Value,
     package: &TypeScriptPackage,

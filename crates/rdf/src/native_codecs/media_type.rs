@@ -54,7 +54,10 @@ pub enum NativeRdfFormat {
 /// orthogonal boolean facts, not a state machine — collapsing them into an enum would
 /// obscure the one-fact-per-column table, so the `struct_excessive_bools` lint is
 /// intentionally allowed here.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the descriptor records independent reader and writer capabilities"
+)]
 pub(crate) struct FormatDescriptor {
     /// The variant this row describes.
     pub format: NativeRdfFormat,

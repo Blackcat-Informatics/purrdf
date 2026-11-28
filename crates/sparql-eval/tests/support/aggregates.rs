@@ -10,7 +10,10 @@
 
 // The module is included into more than one integration-test binary, and no single binary
 // uses every helper; an unused-here helper is used there.
-#![allow(dead_code, unreachable_pub)]
+#![expect(
+    dead_code,
+    reason = "each test or benchmark includes a different subset of this shared fixture"
+)]
 
 use purrdf_core::TermValue;
 use purrdf_sparql_eval::{
@@ -22,7 +25,7 @@ const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 
 /// How an integer fixture aggregate folds its arguments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Fold {
+pub(crate) enum Fold {
     /// The running sum of the single argument.
     Sum,
     /// The running product of the single argument: declares identically to [`Fold::Sum`]
@@ -59,7 +62,7 @@ fn integer(term: Option<&TermValue>) -> Option<i64> {
 }
 
 /// The running total of one [`Fold`].
-pub struct FoldAccumulator {
+pub(crate) struct FoldAccumulator {
     fold: Fold,
     total: i64,
 }
@@ -99,16 +102,16 @@ impl AggregateAccumulator for FoldAccumulator {
 
 /// A commutative integer aggregate with no state bound, folding by [`Self::fold`] under
 /// the declared [`Self::volatility`].
-pub struct FoldAggregate {
+pub(crate) struct FoldAggregate {
     /// What the accumulator computes.
-    pub fold: Fold,
+    pub(crate) fold: Fold,
     /// The declared determinism class.
-    pub volatility: Volatility,
+    pub(crate) volatility: Volatility,
 }
 
 impl FoldAggregate {
     /// A [`Volatility::Stable`] aggregate folding by `fold`.
-    pub const fn stable(fold: Fold) -> Self {
+    pub(crate) const fn stable(fold: Fold) -> Self {
         Self {
             fold,
             volatility: Volatility::Stable,

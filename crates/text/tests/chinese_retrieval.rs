@@ -19,6 +19,7 @@ use purrdf_text::{
     segment::Dictionary,
 };
 
+#[expect(dead_code, reason = "this target uses a subset of the shared fixtures")]
 #[path = "support/sparql.rs"]
 mod sparql;
 
