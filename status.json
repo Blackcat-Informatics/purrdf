@@ -1,0 +1,432 @@
+{
+  "issue": 1474,
+  "pr_number": 1652,
+  "branch": "paudley/1474-meet-the-shared-build-standard-hook",
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1474-meet-the-shared-build-standard-hook/.stage/meet-the-shared-build-standard-hook",
+  "observed_at": "2026-11-28T08:20:52.487480+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews"
+  ],
+  "blocked": [],
+  "unavailable": [],
+  "next_actions": [],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrdf/.worktrees/1474-meet-the-shared-build-standard-hook/.stage/meet-the-shared-build-standard-hook/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrdf/.worktrees/1474-meet-the-shared-build-standard-hook/.stage/meet-the-shared-build-standard-hook/pr-comments.md",
+    "status": "/home/paudley/Active/purrdf/.worktrees/1474-meet-the-shared-build-standard-hook/.stage/meet-the-shared-build-standard-hook/status.json",
+    "checks": "/home/paudley/Active/purrdf/.worktrees/1474-meet-the-shared-build-standard-hook/.stage/meet-the-shared-build-standard-hook/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrdf/.worktrees/1474-meet-the-shared-build-standard-hook/.stage/meet-the-shared-build-standard-hook/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "d1b343bf2c010e076e5b9c5d3e93d35d7e75bbc6",
+    "headRefName": "paudley/1474-meet-the-shared-build-standard-hook",
+    "headRefOid": "e3332b6b18249d2a5342314d0150432e76222fdc",
+    "isCrossRepository": false,
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 1652,
+    "state": "OPEN",
+    "title": "Generate the shared-job reference and lock Cargo gate resolution",
+    "url": "https://github.com/Blackcat-Informatics/purrdf/pull/1652"
+  },
+  "checks": {
+    "state": "pass",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140918053505",
+        "name": "simd-asm",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140913069709",
+        "name": "conformance",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140913069719",
+        "name": "test",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140912090356",
+        "name": "cross-arch",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140906643697",
+        "name": "workspace",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140903554250",
+        "name": "simd-asm-config (wasm32-simd128)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140903554153",
+        "name": "simd-asm-config (x86_64)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140903554120",
+        "name": "simd-asm-config (wasm32)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140903554129",
+        "name": "simd-asm-config (aarch64)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140903554101",
+        "name": "simd-asm-config (x86_64-v4)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140903554111",
+        "name": "simd-asm-config (aarch64-neoverse-v1)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140903554097",
+        "name": "simd-asm-config (x86_64-v3)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892862111",
+        "name": "test (integration-2)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892862045",
+        "name": "cross-arch-i686",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892862123",
+        "name": "avx512-sde",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892862031",
+        "name": "test (integration-7)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892862065",
+        "name": "cross-arch-riscv64 (suites)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892862057",
+        "name": "test (integration-3)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892862033",
+        "name": "cross-arch-riscv64 (determinism-one-worker)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892862041",
+        "name": "cross-arch-riscv64 (determinism-more-workers)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861866",
+        "name": "workspace-compiler",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861964",
+        "name": "wasm-schema-oracles",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892862040",
+        "name": "simd-asm-compiler",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861880",
+        "name": "python-publisher",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892862015",
+        "name": "geo-determinism",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861887",
+        "name": "test (integration-1)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861813",
+        "name": "test (doc)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861903",
+        "name": "miri",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861769",
+        "name": "workspace-hygiene",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861810",
+        "name": "projection-oracles",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861774",
+        "name": "test (integration-6)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861766",
+        "name": "test (integration-5)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861747",
+        "name": "test (lib)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861835",
+        "name": "cross-arch-i586",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861762",
+        "name": "msrv",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861748",
+        "name": "cross-arch-riscv64 (determinism-serial)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861781",
+        "name": "capi",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970646/job/140898702968",
+        "name": "Deploy to GitHub Pages",
+        "state": "SKIPPED",
+        "workflow": "Docs"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861784",
+        "name": "wasm-package",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861721",
+        "name": "test (integration-4)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861726",
+        "name": "wasm",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861705",
+        "name": "conformance (shapes)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861722",
+        "name": "wasm-exec",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116968709/job/140892858953",
+        "name": "Analyze (javascript-typescript)",
+        "state": "SUCCESS",
+        "workflow": "CodeQL"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116968709/job/140892858869",
+        "name": "Analyze (actions)",
+        "state": "SUCCESS",
+        "workflow": "CodeQL"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116968709/job/140892858907",
+        "name": "Analyze (python)",
+        "state": "SUCCESS",
+        "workflow": "CodeQL"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861994",
+        "name": "windows-mtime",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/runs/140894428886",
+        "name": "CodeQL",
+        "state": "SUCCESS",
+        "workflow": ""
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861744",
+        "name": "conformance (core)",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116968709/job/140892858618",
+        "name": "Analyze (c-cpp)",
+        "state": "SUCCESS",
+        "workflow": "CodeQL"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116968709/job/140892858806",
+        "name": "Analyze (rust)",
+        "state": "SUCCESS",
+        "workflow": "CodeQL"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892862023",
+        "name": "aarch64",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861489",
+        "name": "doc",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970646/job/140892860965",
+        "name": "Build The PurRDF Book",
+        "state": "SUCCESS",
+        "workflow": "Docs"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892861686",
+        "name": "pytest",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://coderabbit.ai?utm_source=cr_app&utm_medium=github",
+        "name": "CodeRabbit",
+        "state": "NEUTRAL",
+        "workflow": ""
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892862828",
+        "name": "simd-asm-projection",
+        "state": "SKIPPED",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892863017",
+        "name": "native-profile",
+        "state": "SKIPPED",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892863716",
+        "name": "native-profile-comparison",
+        "state": "SKIPPED",
+        "workflow": "CI"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/46116970708/job/140892863110",
+        "name": "native-profile-admission",
+        "state": "SKIPPED",
+        "workflow": "CI"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "e3332b6b18249d2a5342314d0150432e76222fdc",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 1,
+    "change_token": "ec6cf4c6c814eb03a9a4279cbee73bd0f2ddbce05fc5b9365ad1d9d7981c5304"
+  },
+  "local": {
+    "head": "e3332b6b18249d2a5342314d0150432e76222fdc",
+    "branch": "paudley/1474-meet-the-shared-build-standard-hook",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 1652,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #1652 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  }
+}

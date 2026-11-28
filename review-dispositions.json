@@ -1,0 +1,16 @@
+{
+  "github:comment:IC_kwDOTKq-Ms8AAAABr0KeCw": {
+    "resolution": "acknowledged",
+    "reason": "The capacity notice contains no technical finding. The exact combined changes were independently reviewed.",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-28T06:31:11Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "71e034d80465a170a7ac847d27376b8650ad327fea30a7773701d2e2a369e9b4"
+    }
+  }
+}

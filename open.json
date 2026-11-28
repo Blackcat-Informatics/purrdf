@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "issue": 1474,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1474-meet-the-shared-build-standard-hook",
+  "branch": "paudley/1474-meet-the-shared-build-standard-hook",
+  "slug": "meet-the-shared-build-standard-hook",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1474-meet-the-shared-build-standard-hook/.stage/meet-the-shared-build-standard-hook",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "eadd519a3b95beae51f76c766656195af9f3ef80",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/1474-meet-the-shared-build-standard-hook",
+    "branch:paudley/1474-meet-the-shared-build-standard-hook",
+    "ignored:31243 files (31240 reflinked, 0 written)",
+    "rust-caches:skipping busy source /opt/.cargo/29/947655574e36a5: /opt/.cargo/29/947655574e36a5/debug/.cargo-build-lock; skipping busy source /opt/.cargo/29/947655574e36a5: /opt/.cargo/29/947655574e36a5/debug/.cargo-build-lock; reflinked /home/paudley/Active/purrdf/.worktrees/1365-strict-lints-deny-levels-in-the caches into /home/paudley/Active/purrdf/.worktrees/1474-meet-the-shared-build-standard-hook plus 1 dependency units from 1 other checkouts in 63.7s; 20812 unchanged files keep their built mtimes; 519 other files take the seed time and rebuild; 582 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrdf/.worktrees/1474-meet-the-shared-build-standard-hook/.stage/meet-the-shared-build-standard-hook",
+    "issue:/home/paudley/Active/purrdf/.worktrees/1474-meet-the-shared-build-standard-hook/.stage/meet-the-shared-build-standard-hook/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-28T00:09:37-0600",
+  "seed_error": "",
+  "tracker": ""
+}
