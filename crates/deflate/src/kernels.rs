@@ -145,13 +145,22 @@ pub(crate) fn match_length_portable(a: &[u8], b: &[u8]) -> usize {
     common_prefix_len(a, b)
 }
 
+/// Check that all four-byte windows fit, including three bytes of slack
+/// after the start of an empty run. Check by subtraction to avoid overflow.
+#[inline]
+pub(crate) fn check_hash_windows(data_len: usize, start: usize, count: usize) {
+    assert!(
+        data_len
+            .checked_sub(start)
+            .is_some_and(|remaining| remaining >= 3 && count <= remaining - 3),
+        "hash windows out of bounds"
+    );
+}
+
 /// Portable window hashing.
 #[inline(never)]
 pub(crate) fn hash_windows_portable(data: &[u8], start: usize, out: &mut [u32]) {
-    assert!(
-        start + out.len() + 3 <= data.len(),
-        "hash windows out of bounds"
-    );
+    check_hash_windows(data.len(), start, out.len());
     for (i, slot) in out.iter_mut().enumerate() {
         let p = start + i;
         let w = u32::from_le_bytes(*data[p..].first_chunk().expect("four bytes"));
@@ -161,7 +170,13 @@ pub(crate) fn hash_windows_portable(data: &[u8], start: usize, out: &mut [u32]) 
 
 #[cfg(test)]
 mod tests {
-    use super::common_prefix_len;
+    use super::{check_hash_windows, common_prefix_len};
+
+    #[test]
+    #[should_panic(expected = "hash windows out of bounds")]
+    fn hash_window_admission_refuses_out_of_range_start_before_any_load() {
+        check_hash_windows(3, usize::MAX, 0);
+    }
 
     /// Every length through three sixteen-byte words, a single difference at
     /// every position (and none), both argument orders and unequal lengths:

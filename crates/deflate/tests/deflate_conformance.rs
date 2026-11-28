@@ -1507,6 +1507,8 @@ fn record_match_length_vectors_when_asked() {
 
 fn hash_kernels_match_portable() {
     for backend in Backend::all_available() {
+        // An empty run still requires three bytes of slack and reads none.
+        assert_eq!(backend.hash_windows(&[0; 3], 0, &mut []), Some(()));
         for len in 4..300usize {
             let data = xoshiro256_bytes(len, len as u64);
             for start in [0, 1, 5] {

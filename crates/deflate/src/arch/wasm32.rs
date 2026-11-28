@@ -12,7 +12,8 @@ use core::arch::wasm32::{
 
 use super::VectorKernels;
 use crate::kernels::{
-    HASH_BITS, HASH_MULTIPLIER, check_copy, hash_windows_portable, match_length_portable,
+    HASH_BITS, HASH_MULTIPLIER, check_copy, check_hash_windows, hash_windows_portable,
+    match_length_portable,
 };
 
 /// simd128 kernels; the build's `+simd128` is the whole of the detection.
@@ -75,10 +76,7 @@ fn match_length_simd128(a: &[u8], b: &[u8]) -> usize {
 
 #[inline(never)]
 fn hash_simd128(data: &[u8], start: usize, out: &mut [u32]) {
-    assert!(
-        start + out.len() + 3 <= data.len(),
-        "hash windows out of bounds"
-    );
+    check_hash_windows(data.len(), start, out.len());
     let index = i8x16(0, 1, 2, 3, 1, 2, 3, 4, 2, 3, 4, 5, 3, 4, 5, 6);
     let multiplier = u32x4_splat(HASH_MULTIPLIER);
     let mut i = 0;
