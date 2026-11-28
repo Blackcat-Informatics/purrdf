@@ -333,8 +333,8 @@ pub(crate) fn blake3_compress_on<const OUTPUT: usize>(
 pub(crate) fn blake3_messages_on(
     backend: crate::blake3::Backend,
     inputs: &[&[u8]],
-    mode: crate::blake3::Mode,
     out: &mut [crate::blake3::Hash],
+    mode: crate::blake3::Mode,
 ) -> Option<()> {
     use crate::dispatch::Backend as _;
     if !backend.is_available() {
