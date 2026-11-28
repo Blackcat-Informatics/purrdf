@@ -20,6 +20,7 @@
 
 mod asm_reports;
 mod capacity;
+mod cargo_source_policy;
 mod census;
 mod glossary;
 mod job_homes;
@@ -48,6 +49,7 @@ Usage: helper-census [--root DIR] [--ledger FILE] <mode>
        helper-census --glossary-gate [--root DIR] [--po FILE]
                      [--glossary FILE] [--self-test] [--inventory FILE]
        helper-census --wasm-package-hosts
+       helper-census --cargo-source-policy ROOT CONSUMER [ROOT_JSON CONSUMER_JSON]
        helper-census --wasm-imports FILE
        helper-census [--root DIR] --non-rust-ratchet
                      (--base REV | --merge-base-with REF)
@@ -241,7 +243,15 @@ fn parse_arguments(mut args: impl Iterator<Item = String>) -> Result<Arguments, 
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let specialized = if args.iter().any(|arg| arg == "--wasm-package-hosts") {
+    let specialized = if args
+        .first()
+        .is_some_and(|arg| arg == "--cargo-source-policy")
+    {
+        Some((
+            "cargo-source-policy",
+            cargo_source_policy::run(&args).map_err(|error| error.to_string()),
+        ))
+    } else if args.iter().any(|arg| arg == "--wasm-package-hosts") {
         Some(("wasm-package", wasm_package::run(&args)))
     } else if args.iter().any(|arg| arg == "--wasm-imports") {
         Some(("wasm-imports", wasm_imports::run(&args)))

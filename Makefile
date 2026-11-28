@@ -37,16 +37,23 @@
 # themselves.
 MAKEFLAGS += --no-print-directory
 
+CARGO_TARGET_DIR_QUERY := cargo metadata --no-deps --locked --format-version 1 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null
+
 # Match Cargo's effective target directory, including `build.target-dir` from
 # host/workspace configuration. An explicit environment or command-line value
 # bypasses discovery.
+# The stand-alone source policy lane has no build outputs and sets its own Cargo home.
+ifneq ($(MAKECMDGOALS),cargo-source-policy)
 ifeq ($(origin CARGO_TARGET_DIR), undefined)
-CARGO_TARGET_DIR := $(shell cargo metadata --no-deps --locked --format-version 1 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null)
+CARGO_TARGET_DIR := $(shell $(CARGO_TARGET_DIR_QUERY))
 endif
 ifeq ($(strip $(CARGO_TARGET_DIR)),)
 $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo metadata and python3 are available)
 endif
+endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
+override CARGO_DENY_VERSION := 0.20.2
+override CARGO_POLICY_CONSUMER := crates/jsonschema/tests/preserve_order_consumer
 # The integration branch the non-Rust ratchet compares against: its BASE is the
 # merge-base of this ref with HEAD. The pre-commit hook reads the same variable.
 PURRDF_RATCHET_BASE ?= origin/main
@@ -118,6 +125,7 @@ workspace-gate: ## Run the compiler and hygiene checks behind the hosted `worksp
 	cargo clippy --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --all-targets --locked -- -D warnings
 	cargo check --workspace --lib --tests --locked
 	cargo run -q --locked -p helper-census -- --no-features
+	$(MAKE) cargo-source-policy CARGO_POLICY_HELPER="$(CARGO_TARGET_DIR)/debug/helper-census"
 	python3 scripts/check-toolchain-pin.py
 	python3 scripts/check-toolchain-pin.py --self-test
 	python3 scripts/check-gate-parity.py --self-test
@@ -528,6 +536,96 @@ conformance: ## Umbrella conformance matrix: native Rust W3C suites + the Python
 
 iri-resolver-hygiene: ## Prove the resolver ring-fence: RFC 3986 reference resolution only in crates/iri/src.
 	python3 scripts/check-iri-resolver-singleton.py
+
+.PHONY: cargo-source-policy
+cargo-source-policy: ## Check locked dependency versions and admitted sources.
+	@test -f deny.toml && test ! -L deny.toml || { \
+		printf '%s\n' 'ERROR: repository root deny.toml must be a regular policy file.' >&2; exit 1; \
+	}
+	@set -eu; \
+	require_file() { \
+		if test -L "$$1" || test ! -f "$$1"; then \
+			printf 'ERROR: %s must be a regular file, not a symbolic link.\n' "$$1" >&2; exit 1; \
+		fi; \
+	}; \
+	check_config() { \
+		cargo_dir="$$1/.cargo"; \
+		if test -L "$$cargo_dir" || { test -e "$$cargo_dir" && test ! -d "$$cargo_dir"; }; then \
+			printf 'ERROR: %s must be a directory, not a symbolic link.\n' "$$cargo_dir" >&2; exit 1; \
+		fi; \
+		for config in "$$cargo_dir/config" "$$cargo_dir/config.toml"; do \
+			if test -L "$$config" || test -e "$$config"; then require_file "$$config"; fi; \
+		done; \
+	}; \
+	require_file Cargo.toml; \
+	require_file Cargo.lock; \
+	check_config .; \
+	dir=.; remaining="$(CARGO_POLICY_CONSUMER)"; \
+	while test -n "$$remaining"; do \
+		dir="$$dir/$${remaining%%/*}"; \
+		if test -L "$$dir" || test ! -d "$$dir"; then \
+			printf 'ERROR: %s must be a directory, not a symbolic link.\n' "$$dir" >&2; exit 1; \
+		fi; \
+		check_config "$$dir"; \
+		for name in deny.toml .deny.toml .cargo/deny.toml; do \
+			path="$$dir/$$name"; \
+			if test -L "$$path" || test -e "$$path"; then \
+				printf 'ERROR: %s shadows repository root deny.toml.\n' "$$path" >&2; exit 1; \
+			fi; \
+		done; \
+		case "$$remaining" in */*) remaining=$${remaining#*/} ;; *) remaining= ;; esac; \
+	done; \
+	require_file "$$dir/Cargo.toml"; \
+	require_file "$$dir/Cargo.lock"
+	@# Populate both locked graphs before Cargo Deny reads the private index.
+	@# Deny finishes its own locked fetch before gathering crates, but can log errors and exit zero.
+	@set -eu; \
+	helper="$(CARGO_POLICY_HELPER)"; \
+	if test -z "$$helper"; then \
+		cargo build --locked -p helper-census; \
+		target_dir="$(CARGO_TARGET_DIR)"; \
+		if test -z "$$target_dir"; then target_dir=$$($(CARGO_TARGET_DIR_QUERY)); fi; \
+		test -n "$$target_dir" || { printf '%s\n' 'ERROR: cannot resolve the Cargo target directory for helper-census.' >&2; exit 1; }; \
+		helper="$$target_dir/debug/helper-census"; \
+	fi; \
+	if test ! -f "$$helper" || test ! -x "$$helper"; then \
+		printf 'ERROR: helper-census is not executable at %s. Build the locked helper-census first.\n' "$$helper" >&2; exit 1; \
+	fi; \
+	case "$$helper" in /*) ;; *) helper="$$PWD/$$helper" ;; esac; \
+	"$$helper" --cargo-source-policy "$$PWD" "$(CARGO_POLICY_CONSUMER)"; \
+	umask 077; \
+	common_dir=$$(git rev-parse --path-format=absolute --git-common-dir); \
+	scratch=$$(dirname "$$common_dir")/.stage; \
+	mkdir -p "$$scratch"; \
+	private_home=$$(mktemp -d "$$scratch/purrdf-cargo-policy.XXXXXXXX"); \
+	trap 'status=$$?; if ! rm -rf -- "$$private_home" && test "$$status" -eq 0; then status=1; fi; exit "$$status"' EXIT; \
+	trap 'exit 129' HUP; \
+	trap 'exit 130' INT; \
+	trap 'exit 143' TERM; \
+	export STAGE_CARGO_HOME="$$private_home" CARGO_HOME="$$private_home" CARGO_NET_OFFLINE=false; \
+	test "$$(cargo deny --locked --version)" = "cargo-deny $(CARGO_DENY_VERSION)" || { \
+		printf '%s\n' 'ERROR: install cargo-deny with cargo install --locked cargo-deny --version $(CARGO_DENY_VERSION) and put it on PATH.' >&2; exit 1; \
+	}; \
+	root_manifest="$$PWD/Cargo.toml"; \
+	consumer_manifest="$$PWD/$(CARGO_POLICY_CONSUMER)/Cargo.toml"; \
+	cargo fetch --locked --manifest-path "$$root_manifest"; \
+	cargo fetch --locked --manifest-path "$$consumer_manifest"; \
+	cargo metadata --locked --format-version 1 --manifest-path "$$root_manifest" >"$$private_home/root.json"; \
+	cargo metadata --locked --format-version 1 --manifest-path "$$consumer_manifest" >"$$private_home/consumer.json"; \
+	"$$helper" --cargo-source-policy "$$PWD" "$(CARGO_POLICY_CONSUMER)" \
+		"$$private_home/root.json" "$$private_home/consumer.json"; \
+	run_deny() { \
+		status=0; report=0; \
+		cargo deny --locked --color never --manifest-path "$$1" --metadata-path "$$2" check bans sources \
+			>"$$private_home/deny.log" 2>&1 || status=$$?; \
+		awk '{ print } /^[0-9-]+ [0-9:.]+ \[ERROR\] / { failed = 1 } END { if (failed) exit 1 }' \
+			"$$private_home/deny.log" || report=$$?; \
+		test "$$status" -eq 0 || return "$$status"; \
+		return "$$report"; \
+	}; \
+	run_deny "$$root_manifest" "$$private_home/root.json"; \
+	run_deny "$$consumer_manifest" "$$private_home/consumer.json"
+
 
 layer-hygiene: ## Prove every first-party crate edge is one layers.toml allows, and the table is exact.
 	python3 scripts/check-layers.py --self-test
