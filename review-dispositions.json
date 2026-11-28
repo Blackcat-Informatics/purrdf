@@ -1,0 +1,16 @@
+{
+  "github:comment:IC_kwDOTKq-Ms8AAAABrv4tlg": {
+    "resolution": "acknowledged",
+    "reason": "The automated review stopped at its file limit and reported no technical finding. Independent scoped source reviews remain on record.",
+    "commit": "066a2ced1dfe9088ce65fd1a145e54da0da4da9a",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-28T02:00:48Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "4d164cd39ffd4c5e258f9508caa04da594d6907a2c18603cc1090cffea16a5b7"
+    }
+  }
+}

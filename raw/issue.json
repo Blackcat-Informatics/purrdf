@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Problem\n\nThe workspace lints warn where they should refuse. `unreachable_pub` and the clippy\n`all` group are at `warn`. `unused`, `dead_code`, `allow_attributes` and the\nother named lints are not set at all. No gate builds the library and binary\ntargets with the stricter set below.\n\nA first run of the clippy command below on `main` stopped at `purrdf-hash` with\n`clippy::allow_attributes` on 8 `#[allow]` sites: `crates/rdf-core/build.rs:18`,\n`crates/hash/src/lib.rs:103`, `crates/hash/src/fixed/fold.rs:38`,\n`crates/hash/src/fixed/keys.rs:97,112,127,137` and `crates/hash/src/hex.rs:424`.\nCrates after `purrdf-hash` were not checked, so the full count is unknown.\n\n## Change\n\n1. Add this to `make check`:\n\n   ```\n   cargo clippy --workspace --lib --bins -- \\\n     -D warnings \\\n     -D unused \\\n     -D unreachable-pub \\\n     -D clippy::allow_attributes \\\n     -D clippy::used_underscore_binding \\\n     -D clippy::needless_pass_by_value \\\n     -D clippy::trivially_copy_pass_by_ref \\\n     -D clippy::redundant_clone\n   ```\n\n2. Raise the root `[workspace.lints]` tables to these levels:\n\n   ```toml\n   [workspace.lints.rust]\n   unused = \"deny\"\n   dead_code = \"deny\"\n   unreachable_pub = \"deny\"\n   unused_crate_dependencies = \"warn\"\n\n   [workspace.lints.clippy]\n   all = { level = \"deny\", priority = -1 }\n   pedantic = { level = \"warn\", priority = -1 }\n   allow_attributes = \"deny\"\n   allow_attributes_without_reason = \"deny\"\n   used_underscore_binding = \"deny\"\n   dbg_macro = \"deny\"\n   todo = \"deny\"\n   unimplemented = \"deny\"\n   ```\n\n   Keep the existing entries this list does not name: `nursery`, `missing_docs` and the\n   other rust lints, and the reasoned opt-out list. Every member already inherits the\n   workspace table. The three manifests without a `[lints]` table (the GTS fuzz\n   crate, the preserve-order consumer and the clean-room oracle template) are decided\n   one by one.\n\n3. Fix every violation in the code. Do not add `allow` entries. With\n   `allow_attributes` denied, each remaining justified suppression becomes\n   `#[expect(..., reason = \"...\")]`. Update the `#[allow]` guidance in `AGENTS.md`\n   and `docs/agents/RUST_GUIDELINES.md` to match.\n\n## Acceptance\n\n- The clippy command above exits 0 on the branch head, run with the gate's flags\n  exactly, and is in `make check`.\n- The raised workspace levels are in the root `Cargo.toml`, and the existing\n  `make check` clippy line (`--all-targets -D warnings`) still passes.\n- No new `#[allow]` attributes, and no new opt-outs in the lint tables.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-17T06:10:35Z",
+  "labels": [],
+  "milestone": null,
+  "number": 1365,
+  "state": "OPEN",
+  "title": "Strict lints: deny levels in the workspace table and a stricter clippy line in make check",
+  "updatedAt": "2026-11-17T06:10:35Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/1365"
+}

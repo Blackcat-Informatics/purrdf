@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "issue": 1365,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1365-strict-lints-deny-levels-in-the",
+  "branch": "paudley/1365-strict-lints-deny-levels-in-the",
+  "slug": "strict-lints-deny-levels-in-the",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1365-strict-lints-deny-levels-in-the/.stage/strict-lints-deny-levels-in-the",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "52645a8e11c59a4c5f33dd586344fc13fe5b7bd2",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/1365-strict-lints-deny-levels-in-the",
+    "branch:paudley/1365-strict-lints-deny-levels-in-the",
+    "ignored:31243 files (31240 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrdf/.worktrees/1346-blake3-vector-kernels-for-short caches into /home/paudley/Active/purrdf/.worktrees/1365-strict-lints-deny-levels-in-the plus 0 dependency units from 0 other checkouts in 19.1s; 21279 unchanged files keep their built mtimes; 38 other files take the seed time and rebuild; 3 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrdf/.worktrees/1365-strict-lints-deny-levels-in-the/.stage/strict-lints-deny-levels-in-the",
+    "issue:/home/paudley/Active/purrdf/.worktrees/1365-strict-lints-deny-levels-in-the/.stage/strict-lints-deny-levels-in-the/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-27T15:18:08-0600",
+  "seed_error": "",
+  "tracker": ""
+}

@@ -1,0 +1,4306 @@
+diff --git .github/actions/recover-python-release/action.yml .github/actions/recover-python-release/action.yml
+new file mode 100644
+index 000000000..876afc033
+--- /dev/null
++++ .github/actions/recover-python-release/action.yml
+@@ -0,0 +1,32 @@
++# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++name: Recover qualified Python distributions
++description: Verify retained release bytes and check both live PyPI inventories.
++runs:
++  using: composite
++  steps:
++    - name: Retrieve and verify the original qualified distributions
++      shell: bash
++      env:
++        GH_TOKEN: ${{ github.token }}
++      run: bash scripts/recover-python-release.sh "$RUNNER_TEMP/purrdf-recovered"
++    - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
++      with:
++        python-version: "3.13"
++        architecture: x64
++    - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
++      with:
++        enable-cache: false
++    - name: Verify both projects against the live PyPI inventories
++      shell: bash
++      run: |
++        publisher_env="$(mktemp -d "$RUNNER_TEMP/purrdf-python-publisher.XXXXXX")"
++        uv venv --python 3.13 "$publisher_env"
++        python="$publisher_env/bin/python"
++        uv pip sync --python "$python" --require-hashes --only-binary :all: \
++          scripts/python-publisher-requirements.txt
++        bash scripts/publish-python-release.sh purrdf 5.0.1 \
++          "$RUNNER_TEMP/purrdf-recovered/release-dist" "$python" preflight
++        bash scripts/publish-python-release.sh purrdf-rdflib 5.0.1 \
++          "$RUNNER_TEMP/purrdf-recovered/release-shadow" "$python" preflight
++        printf 'PURRDF_RECOVERY_PYTHON=%s\n' "$python" >> "$GITHUB_ENV"
+diff --git .github/extract-rust-quickstarts.rs .github/extract-rust-quickstarts.rs
+new file mode 100644
+index 000000000..96c0b23ad
+--- /dev/null
++++ .github/extract-rust-quickstarts.rs
+@@ -0,0 +1,219 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++use std::{
++    error::Error,
++    fs,
++    io::{Error as IoError, ErrorKind},
++    path::Path,
++};
++
++fn invalid(message: &str) -> IoError {
++    IoError::new(ErrorKind::InvalidData, message)
++}
++
++enum Fence {
++    Other,
++    Rust { body_start: usize },
++}
++
++/// Read the one Rust program from the one Rust section without rewriting its bytes.
++/// Recognizes the exact, top-level triple-backtick fences used by the READMEs.
++fn sample(readme: &str) -> Result<&str, &'static str> {
++    let mut offset = 0;
++    let mut seen_heading = false;
++    let mut in_section = false;
++    let mut fence = None;
++    let mut sample = None;
++
++    for raw_line in readme.split_inclusive('\n') {
++        let start = offset;
++        offset += raw_line.len();
++        let line = raw_line
++            .strip_suffix("\r\n")
++            .or_else(|| raw_line.strip_suffix('\n'))
++            .unwrap_or(raw_line);
++        match fence {
++            Some(Fence::Rust { body_start }) => {
++                if line == "```" {
++                    let body = &readme[body_start..start];
++                    if body.trim().is_empty() {
++                        return Err("empty Rust quickstart fence");
++                    }
++                    sample = Some(body);
++                    fence = None;
++                } else if line.starts_with("```") {
++                    return Err("Rust quickstart must close with an exact triple-backtick line");
++                }
++            }
++            Some(Fence::Other) => {
++                if line == "```" {
++                    fence = None;
++                }
++            }
++            None if line == "### Rust" => {
++                if seen_heading {
++                    return Err("expected exactly one Rust quickstart heading");
++                }
++                seen_heading = true;
++                in_section = true;
++            }
++            None if matches!(line.split_once(' '), Some(("#" | "##" | "###", _))) => {
++                in_section = false;
++            }
++            None if in_section && line == "```rust" => {
++                if sample.is_some() {
++                    return Err("expected exactly one Rust quickstart fence");
++                }
++                fence = Some(Fence::Rust { body_start: offset });
++            }
++            None if line.starts_with("```") => fence = Some(Fence::Other),
++            None => {}
++        }
++    }
++
++    if matches!(fence, Some(Fence::Rust { .. })) {
++        return Err("unclosed Rust quickstart fence");
++    }
++    if !seen_heading {
++        return Err("missing Rust quickstart heading");
++    }
++    sample.ok_or("missing exact Rust quickstart fence")
++}
++
++fn version(tag: &str) -> Result<&str, IoError> {
++    let version = tag
++        .strip_prefix("rust-v")
++        .ok_or_else(|| invalid("expected a Rust release tag"))?;
++    let mut components = version.split('.');
++    for _ in 0..3 {
++        let component = components
++            .next()
++            .ok_or_else(|| invalid("release tag is not a stable version"))?;
++        if component.parse::<u64>().is_err()
++            || !component.bytes().all(|byte| byte.is_ascii_digit())
++            || (component.len() > 1 && component.starts_with('0'))
++        {
++            return Err(invalid("release tag is not a stable version"));
++        }
++    }
++    if components.next().is_some() {
++        return Err(invalid("release tag is not a stable version"));
++    }
++    Ok(version)
++}
++
++fn read_sample(readme: &Path) -> Result<String, IoError> {
++    let with_path = |error: &str| format!("{}: {error}", readme.display());
++    let source = fs::read_to_string(readme)
++        .map_err(|error| IoError::new(error.kind(), with_path(&error.to_string())))?;
++    sample(&source)
++        .map(str::to_owned)
++        .map_err(|error| invalid(&with_path(error)))
++}
++
++fn manifest(version: &str) -> String {
++    format!(
++        "[workspace]\n\n[package]\nname = \"purrdf-published-quickstart-smoke\"\n\
++         version = \"0.0.0\"\nedition = \"2024\"\npublish = false\nautobins = false\n\n\
++         [dependencies]\npurrdf = \"={version}\"\n\n\
++         [[bin]]\nname = \"readme-en\"\npath = \"src/readme-en.rs\"\n\n\
++         [[bin]]\nname = \"readme-zh\"\npath = \"src/readme-zh.rs\"\n\n\
++         [profile.dev]\nopt-level = 3\ndebug = 0\n"
++    )
++}
++
++/// Check Cargo's freshly generated lock receipt, whose package fields are
++/// emitted as individual quoted lines. Never accept a second facade package.
++fn verify_lock(lock: &str, tag: &str, checksum: &str) -> Result<(), IoError> {
++    let version = version(tag)?;
++    if checksum.len() != 64
++        || !checksum
++            .bytes()
++            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
++    {
++        return Err(invalid("expected a lowercase registry SHA-256"));
++    }
++    let mut matches = lock
++        .split("\n[[package]]\n")
++        .skip(1)
++        .filter(|block| block.lines().any(|line| line == r#"name = "purrdf""#));
++    let Some(package) = matches.next() else {
++        return Err(invalid("Cargo.lock is missing the purrdf package"));
++    };
++    if matches.next().is_some() {
++        return Err(invalid("Cargo.lock contains more than one purrdf package"));
++    }
++    for (key, expected) in [
++        ("version", version),
++        (
++            "source",
++            "registry+https://github.com/rust-lang/crates.io-index",
++        ),
++        ("checksum", checksum),
++    ] {
++        let prefix = format!("{key} = ");
++        let mut values = package
++            .lines()
++            .filter_map(|line| line.strip_prefix(&prefix));
++        let actual = values
++            .next()
++            .and_then(|value| value.strip_prefix('"'))
++            .and_then(|value| value.strip_suffix('"'));
++        if actual != Some(expected) || values.next().is_some() {
++            return Err(invalid(&format!(
++                "Cargo.lock purrdf {key} differs from the verified registry package"
++            )));
++        }
++    }
++    Ok(())
++}
++
++fn main() -> Result<(), Box<dyn Error>> {
++    let mut args = std::env::args_os().skip(1);
++    let repo = args
++        .next()
++        .ok_or_else(|| invalid("give a source directory or --verify-lock"))?;
++    if repo == "--verify-lock" {
++        let lock = args.next().ok_or_else(|| invalid("give Cargo.lock path"))?;
++        let tag = args.next().ok_or_else(|| invalid("give release tag"))?;
++        let checksum = args
++            .next()
++            .ok_or_else(|| invalid("give registry checksum"))?;
++        if args.next().is_some() {
++            return Err(invalid("unexpected positional argument").into());
++        }
++        verify_lock(
++            &fs::read_to_string(lock)?,
++            tag.to_str()
++                .ok_or_else(|| invalid("non-UTF-8 release tag"))?,
++            checksum
++                .to_str()
++                .ok_or_else(|| invalid("non-UTF-8 registry checksum"))?,
++        )?;
++        return Ok(());
++    }
++    let output = args
++        .next()
++        .ok_or_else(|| invalid("give new consumer directory"))?;
++    let tag = args.next().ok_or_else(|| invalid("give release tag"))?;
++    if args.next().is_some() {
++        return Err(invalid("unexpected positional argument").into());
++    }
++    let tag = tag
++        .to_str()
++        .ok_or_else(|| invalid("non-UTF-8 release tag"))?;
++    let version = version(tag)?;
++    let root = Path::new(&repo);
++    let english = read_sample(&root.join("README.md"))?;
++    let chinese = read_sample(&root.join("README_zh.md"))?;
++
++    let output = Path::new(&output);
++    fs::create_dir(output)?;
++    let src = output.join("src");
++    fs::create_dir(&src)?;
++    fs::write(src.join("readme-en.rs"), english)?;
++    fs::write(src.join("readme-zh.rs"), chinese)?;
++    fs::write(output.join("Cargo.toml"), manifest(version))?;
++    Ok(())
++}
+diff --git .github/workflows/docs.yaml .github/workflows/docs.yaml
+index ea65c4cb3..68b0925e9 100644
+--- .github/workflows/docs.yaml
++++ .github/workflows/docs.yaml
+@@ -19,6 +19,8 @@ on:
+       - "scripts/fetch-locked-deps.py"
+       - "bindings/python/purrdf_build_backend.py"
+       - "crates/rdf-wasm/**"
++      - "crates/purrdf/examples/museum/**"
++      - "crates/purrdf/examples/museum_attributions.rs"
+       # The zh-Hans gate renders the book and runs these over the rendering.
+       - "crates/sparql-algebra/**"
+       - "crates/helper-census/**"
+diff --git .github/workflows/published-rust-quickstart.yaml .github/workflows/published-rust-quickstart.yaml
+new file mode 100644
+index 000000000..d87f44507
+--- /dev/null
++++ .github/workflows/published-rust-quickstart.yaml
+@@ -0,0 +1,216 @@
++# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++name: Check the published Rust quickstart
++
++on:
++  workflow_call:
++    inputs:
++      release_tag:
++        required: true
++        type: string
++      release_sha:
++        required: true
++        type: string
++      toolchain:
++        required: true
++        type: string
++  workflow_dispatch:
++    inputs:
++      release_tag:
++        description: Existing immutable Rust release tag
++        required: true
++        type: string
++
++permissions:
++  contents: read
++  attestations: read
++
++jobs:
++  smoke:
++    runs-on: ubuntu-latest
++    timeout-minutes: 25
++    steps:
++      - name: Start the run receipt
++        run: |
++          set -euo pipefail
++          mkdir "$RUNNER_TEMP/rust-quickstart-evidence"
++          printf '%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_WORKFLOW_REF" \
++            > "$RUNNER_TEMP/rust-quickstart-evidence/run.txt"
++      - name: Resolve and verify the published source
++        id: source
++        env:
++          GH_TOKEN: ${{ github.token }}
++          RELEASE_TAG: ${{ inputs.release_tag }}
++          EXPECTED_SHA: ${{ inputs.release_sha }}
++          EXPECTED_TOOLCHAIN: ${{ inputs.toolchain }}
++          CALLER_WORKFLOW: ${{ github.workflow_ref }}
++        run: |
++          set -euo pipefail
++          if [[ ! "$RELEASE_TAG" =~ ^rust-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
++            echo "::error::Expected a stable Rust release tag."
++            exit 1
++          fi
++          case "$CALLER_WORKFLOW" in
++            "$GITHUB_REPOSITORY/.github/workflows/release-cargo.yaml@"*)
++              if [[ ! "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ||
++                    ! "$EXPECTED_TOOLCHAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
++                echo "::error::The release check requires the verified commit and exact stable compiler."
++                exit 1
++              fi
++              toolchain=$EXPECTED_TOOLCHAIN
++              ;;
++            "$GITHUB_REPOSITORY/.github/workflows/published-rust-quickstart.yaml@refs/heads/main")
++              if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || -n "$EXPECTED_SHA" ||
++                    -n "$EXPECTED_TOOLCHAIN" ]]; then
++                echo "::error::A historical quickstart check must be dispatched from main."
++                exit 1
++              fi
++              toolchain=stable
++              ;;
++            *)
++              echo "::error::The published quickstart check requires a Cargo release or a manual dispatch from main."
++              exit 1
++              ;;
++          esac
++          evidence="$RUNNER_TEMP/rust-quickstart-evidence"
++          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$evidence/github-release.json"
++          if ! jq -e --arg tag "$RELEASE_TAG" '.tag_name == $tag and .draft == false and
++            .prerelease == false and .immutable == true' "$evidence/github-release.json"; then
++            echo "::error::The tag does not have a published immutable release."
++            exit 1
++          fi
++          ref="refs/tags/$RELEASE_TAG"
++          refs=$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" "$ref" "$ref^{}")
++          release_sha=$(awk -v ref="$ref" '$2 == ref {direct=$1} $2 == ref "^{}" {peeled=$1}
++            END {print peeled ? peeled : direct}' <<< "$refs")
++          if [[ ! "$release_sha" =~ ^[a-f0-9]{40}$ ||
++                ( -n "$EXPECTED_SHA" && "$release_sha" != "$EXPECTED_SHA" ) ]]; then
++            echo "::error::The tag does not resolve to the verified release commit."
++            exit 1
++          fi
++          printf '%s\n' "$RELEASE_TAG" "$release_sha" "$toolchain" > "$evidence/release.txt"
++          {
++            echo "sha=$release_sha"
++            echo "tag=$RELEASE_TAG"
++            echo "toolchain=$toolchain"
++          } >> "$GITHUB_OUTPUT"
++      - name: Check out the verification code
++        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
++        with:
++          ref: ${{ github.workflow_sha }}
++          path: checker
++          persist-credentials: false
++      - name: Verify the registry crate and its build provenance
++        id: registry
++        env:
++          GH_TOKEN: ${{ github.token }}
++          RELEASE_TAG: ${{ steps.source.outputs.tag }}
++          RELEASE_SHA: ${{ steps.source.outputs.sha }}
++        run: |
++          set -euo pipefail
++          evidence="$RUNNER_TEMP/rust-quickstart-evidence"
++          version=${RELEASE_TAG#rust-v}
++          # shellcheck source=/dev/null
++          source "$GITHUB_WORKSPACE/checker/scripts/crates-io-api.sh"
++          trap 'rm -f -- "$CRATES_IO_BODY"' EXIT
++          agent=$(crates_io_user_agent "$version")
++          state=$(crates_io_version_state purrdf "$version" "$agent")
++          if [[ "$state" != present ]]; then
++            printf 'Published purrdf %s is not available in the registry API: %s\n' "$version" "$state" >&2
++            exit 1
++          fi
++          checksum=$(crates_io_version_checksum purrdf "$version")
++          state=$(crates_io_index_state purrdf "$version" "$checksum" "$agent")
++          if [[ "$state" != present ]]; then
++            printf 'Sparse index could not confirm purrdf %s: %s\n' "$version" "$state" >&2
++            exit 1
++          fi
++          archive="$RUNNER_TEMP/purrdf-$version.crate"
++          curl --fail --silent --show-error --location --retry 3 --max-time 120 \
++            --user-agent "$agent" --output "$archive" "https://crates.io/api/v1/crates/purrdf/$version/download"
++          printf '%s  %s\n' "$checksum" "$archive" | sha256sum --strict --check -
++          printf '%s\n' "$checksum" > "$evidence/crate-sha256.txt"
++          gh attestation verify "$archive" --repo "$GITHUB_REPOSITORY" \
++            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-cargo.yaml" \
++            --source-ref "refs/tags/$RELEASE_TAG" --source-digest "$RELEASE_SHA" \
++            --format json > "$evidence/crate-provenance.json"
++          printf 'checksum=%s\n' "$checksum" >> "$GITHUB_OUTPUT"
++      - name: Retrieve only the verified release README blobs
++        env:
++          GH_TOKEN: ${{ github.token }}
++          RELEASE_SHA: ${{ steps.source.outputs.sha }}
++        run: |
++          set -euo pipefail
++          api="repos/$GITHUB_REPOSITORY/git"
++          tree=$(gh api "$api/commits/$RELEASE_SHA" | jq -er --arg sha "$RELEASE_SHA" '
++            select(.sha == $sha) | .tree.sha | select(test("^[0-9a-f]{40}$"))
++          ')
++          manifest=$(gh api "$api/trees/$tree" | jq -ce --arg tree "$tree" '
++            select(.sha == $tree and .truncated == false) | .tree
++          ')
++          source="$RUNNER_TEMP/rust-quickstart-readmes"
++          mkdir "$source"
++          receipt="$RUNNER_TEMP/rust-quickstart-evidence/readme-blobs.txt"
++          printf 'commit %s\ntree %s\n' "$RELEASE_SHA" "$tree" > "$receipt"
++          for readme in README.md README_zh.md; do
++            blob=$(jq -er --arg path "$readme" '
++              map(select(.path == $path)) | select(length == 1) | .[0]
++              | select(.type == "blob" and (.mode == "100644" or .mode == "100755"))
++              | .sha | select(test("^[0-9a-f]{40}$"))
++            ' <<< "$manifest")
++            gh api "$api/blobs/$blob" | jq -er --arg sha "$blob" '
++              select(.sha == $sha and .encoding == "base64") | .content | select(type == "string")
++            ' | base64 --decode > "$source/$readme"
++            if [[ "$(git hash-object --no-filters "$source/$readme")" != "$blob" ]]; then
++              echo "::error::The downloaded bytes for $readme do not match the verified release tree."
++              exit 1
++            fi
++            printf '%s %s\n' "$blob" "$readme" >> "$receipt"
++          done
++      - name: Run both README examples on stable
++        env:
++          RELEASE_TAG: ${{ steps.source.outputs.tag }}
++          RUSTUP_TOOLCHAIN: ${{ steps.source.outputs.toolchain }}
++          CHECKSUM: ${{ steps.registry.outputs.checksum }}
++        run: |
++          set -euo pipefail
++          shopt -s inherit_errexit
++          evidence="$RUNNER_TEMP/rust-quickstart-evidence"
++          consumer="$RUNNER_TEMP/rust-quickstart"
++          cd "$RUNNER_TEMP"
++          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
++          rustup run "$RUSTUP_TOOLCHAIN" rustc -Vv > "$evidence/compiler.txt"
++          compiler=$(awk '$1 == "release:" {print $2}' "$evidence/compiler.txt")
++          [[ "$compiler" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
++          [[ "$RUSTUP_TOOLCHAIN" == stable || "$compiler" == "$RUSTUP_TOOLCHAIN" ]]
++          rustup run "$RUSTUP_TOOLCHAIN" cargo -Vv > "$evidence/cargo.txt"
++          extractor="$RUNNER_TEMP/extract-rust-quickstarts"
++          rustup run "$RUSTUP_TOOLCHAIN" rustc --edition 2024 -D warnings \
++            "$GITHUB_WORKSPACE/checker/.github/extract-rust-quickstarts.rs" -o "$extractor"
++          "$extractor" "$RUNNER_TEMP/rust-quickstart-readmes" "$consumer" "$RELEASE_TAG"
++          cp "$consumer/Cargo.toml" "$consumer"/src/*.rs "$evidence/"
++          export CARGO_HOME="$RUNNER_TEMP/rust-quickstart-cargo"
++          export CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
++          mkdir "$CARGO_HOME"
++          cd "$consumer"
++          rustup run "$RUSTUP_TOOLCHAIN" cargo generate-lockfile > "$evidence/resolve.log" 2>&1
++          cp Cargo.lock "$evidence/"
++          "$extractor" --verify-lock Cargo.lock "$RELEASE_TAG" "$CHECKSUM"
++          result=0
++          for example in readme-en readme-zh; do
++            status=0
++            rustup run "$RUSTUP_TOOLCHAIN" cargo run --locked --bin "$example" \
++              > "$evidence/$example.log" 2>&1 || status=$?
++            printf '%s\n' "$status" > "$evidence/$example.exit"
++            if ((status != 0)); then
++              result=1
++            fi
++          done
++          exit "$result"
++      - name: Retain the exact run record
++        if: always()
++        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
++        with:
++          name: published-rust-quickstart-${{ github.run_attempt }}
++          path: ${{ runner.temp }}/rust-quickstart-evidence/
++          if-no-files-found: error
+diff --git .github/workflows/release-cargo.yaml .github/workflows/release-cargo.yaml
+index 3738f2acd..1b56068d6 100644
+--- .github/workflows/release-cargo.yaml
++++ .github/workflows/release-cargo.yaml
+@@ -544,3 +544,16 @@ jobs:
+           # retained checksums, without comparing a different rebuild.
+           python3 scripts/publish-github-release.py --version "${RELEASE_TAG#rust-v}" \
+             --repository "$GITHUB_REPOSITORY" --sha "$RELEASE_SHA"
++
++  published-rust-quickstart:
++    name: Check the published Rust quickstart
++    needs: [source, publish]
++    if: ${{ needs.source.result == 'success' && needs.publish.result == 'success' }}
++    uses: ./.github/workflows/published-rust-quickstart.yaml
++    permissions:
++      contents: read
++      attestations: read
++    with:
++      release_tag: ${{ needs.source.outputs.tag }}
++      release_sha: ${{ needs.source.outputs.sha }}
++      toolchain: ${{ needs.source.outputs.toolchain }}
+diff --git .github/workflows/release-pypi.yaml .github/workflows/release-pypi.yaml
+index a3bbe9277..bb405ab1e 100644
+--- .github/workflows/release-pypi.yaml
++++ .github/workflows/release-pypi.yaml
+@@ -13,13 +13,22 @@ name: Publish coordinated PurRDF Python distributions
+ permissions: {}
+ 
+ concurrency:
+-  # Rehearsals use their own group and cannot replace a pending publish.
+-  group: python-release-${{ github.event_name == 'workflow_dispatch' && (inputs.publish && 'py-v5.0.1' || 'rehearsal-py-v5.0.1') || github.ref_name }}
++  # Rehearsals and rejected recovery requests cannot replace a pending publish.
++  group: >-
++    python-release-${{ github.event_name == 'workflow_dispatch' &&
++      (inputs.publish && (!inputs.recover ||
++        (github.repository == 'Blackcat-Informatics/purrdf' &&
++         github.ref == 'refs/heads/main' && github.ref_protected)) &&
++       'py-v5.0.1' || 'rehearsal-py-v5.0.1') || github.ref_name }}
+   cancel-in-progress: false
+ 
+ on:
+   workflow_dispatch:
+     inputs:
++      recover:
++        description: Reuse the retained qualification for 5.0.1 without rebuilding
++        type: boolean
++        default: false
+       publish:
+         description: Publish missing wheels for the existing 5.0.1 release
+         type: boolean
+@@ -30,6 +39,7 @@ on:
+ 
+ jobs:
+   qualify:
++    if: github.event_name != 'workflow_dispatch' || !inputs.recover
+     uses: ./.github/workflows/qualify-python-release.yaml
+     permissions:
+       contents: read
+@@ -39,7 +49,7 @@ jobs:
+ 
+   publish-main:
+     needs: qualify
+-    if: github.event_name == 'push' || inputs.publish
++    if: github.event_name == 'push' || (inputs.publish && !inputs.recover)
+     runs-on: ubuntu-latest
+     timeout-minutes: 10
+     permissions:
+@@ -146,3 +156,42 @@ jobs:
+             scripts/python-publisher-requirements.txt
+           bash scripts/publish-python-release.sh purrdf-rdflib "$RELEASE_VERSION" release-shadow \
+             "$publisher_env/bin/python"
++
++  recover-preflight:
++    # An invalid publish request also fails here, without signing permissions.
++    if: github.event_name == 'workflow_dispatch' && inputs.recover && (!inputs.publish || github.repository != 'Blackcat-Informatics/purrdf' || github.ref != 'refs/heads/main' || !github.ref_protected)
++    runs-on: ubuntu-latest
++    permissions:
++      contents: read
++      actions: read
++      attestations: read
++    steps:
++      - name: Require protected main
++        run: |
++          if [[ "$GITHUB_REPOSITORY" != Blackcat-Informatics/purrdf ||
++                "$GITHUB_REF" != refs/heads/main || "$GITHUB_REF_PROTECTED" != true ]]; then
++            echo '::error::Recovery requires a dispatch from protected main'
++            exit 1
++          fi
++      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
++        with:
++          persist-credentials: false
++      - uses: ./.github/actions/recover-python-release
++
++  publish-recovered-native:
++    if: github.event_name == 'workflow_dispatch' && inputs.recover && inputs.publish && github.repository == 'Blackcat-Informatics/purrdf' && github.ref == 'refs/heads/main' && github.ref_protected
++    runs-on: ubuntu-latest
++    permissions:
++      contents: read
++      actions: read
++      attestations: read
++      id-token: write
++    steps:
++      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
++        with:
++          persist-credentials: false
++      - uses: ./.github/actions/recover-python-release
++      - name: Publish only missing native wheels with Trusted Publishing
++        run: |
++          bash scripts/publish-python-release.sh purrdf 5.0.1 \
++            "$RUNNER_TEMP/purrdf-recovered/release-dist" "$PURRDF_RECOVERY_PYTHON"
+diff --git Makefile Makefile
+index 38992b449..cb5f7296a 100644
+--- Makefile
++++ Makefile
+@@ -302,7 +302,7 @@ test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|
+ 		lib) $(MAKE) binaryen-prerequisite || exit $$?; set -x; cargo test --workspace --exclude purrdf-python --locked --lib --bins ;; \
+ 		doc) set -x; cargo test --workspace --locked --doc \
+ 			&& cargo build --workspace --locked --examples --profile test \
+-			&& cargo test --workspace --locked --example graphql_oracle_fixture --example typescript_oracle_fixture --example text_relevance ;; \
++			&& cargo test --workspace --locked --example graphql_oracle_fixture --example typescript_oracle_fixture --example text_relevance --example museum_attributions ;; \
+ 		integration-1) set -x; cargo test --workspace --locked --test '[a-d]*' -- --exact --skip c_abi_smoke ;; \
+ 		integration-2) set -x; cargo test --workspace --locked --test '[e-j]*' ;; \
+ 		integration-3) set -x; cargo test --workspace --locked --test '[pq]*' ;; \
+@@ -889,6 +889,7 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface
+ 				official_modes_and_extended_output \
+ 				xof_large_output_and_seek_boundaries \
+ 				derived_context_trees_match_across_backends \
++				mixed_message_batch_simd_dispatch \
+ 				random_inputs_cover_irregular_trees_and_alignment \
+ 		&& env -u RUSTFLAGS \
+ 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
+@@ -1009,10 +1010,13 @@ playground: ## Assemble the standalone RDF-1.2 console into $(CARGO_TARGET_DIR)/
+ 	python3 scripts/fetch-locked-deps.py
+ 	python3 scripts/package-licenses.py --profile npm --check
+ 	@cp docs/playground/index.html docs/playground/app.mjs docs/playground/engine.worker.mjs \
+-		docs/playground/sarif.mjs docs/playground/style.css docs/playground/sw.mjs \
++		docs/playground/locale.mjs docs/playground/permalink.mjs docs/playground/sarif.mjs docs/playground/style.css docs/playground/sw.mjs \
+ 		docs/playground/manifest.webmanifest \
+ 		"$(PLAYGROUND_OUT)/"
+ 	@cp -R docs/playground/examples "$(PLAYGROUND_OUT)/examples"
++	@mkdir -p "$(PLAYGROUND_OUT)/examples/museum"
++	@cp crates/purrdf/examples/museum/collection.ttl crates/purrdf/examples/museum/attributions.rq \
++		"$(PLAYGROUND_OUT)/examples/museum/"
+ 	@cp crates/rdf-wasm/js/index.mjs crates/rdf-wasm/js/package.json "$(PLAYGROUND_OUT)/purrdf/"
+ 	@cp -R crates/rdf-wasm/js/pkg "$(PLAYGROUND_OUT)/purrdf/pkg"
+ 	@cp -R crates/rdf-wasm/js/licenses "$(PLAYGROUND_OUT)/purrdf/licenses"
+diff --git PROVENANCE.md PROVENANCE.md
+index 664da73a4..20a31553f 100644
+--- PROVENANCE.md
++++ PROVENANCE.md
+@@ -384,6 +384,18 @@ commit record. The release script fixes the tar permission mask and refuses
+ export attributes that would remove or substitute paths. GNU gzip omits its
+ filename and timestamp fields. [Git archive documentation](https://git-scm.com/docs/git-archive) · [GNU gzip options](https://www.gnu.org/software/gzip/manual/gzip.html#Invoking-gzip)
+ 
++## Published Rust quickstart
++
++The postpublication check uses the caller's workflow revision for the verifier
++and reads only the two README blobs from the release tag's verified commit.
++It checks their Git object hashes before extracting the programs. The
++published crate's attestation binds the release workflow, tag and commit.
++The standalone Cargo lockfile binds the same registry crate checksum.
++[Reusable workflow context](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#github-context) ·
++[GitHub Git database API](https://docs.github.com/en/rest/git) ·
++[GitHub attestation verification](https://cli.github.com/manual/gh_attestation_verify) ·
++[Cargo lockfile guide](https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html)
++
+ ## C ABI verification tool
+ 
+ The Ubuntu C ABI job uses the upstream cargo-c 0.10.23 Linux x86-64
+diff --git README.md README.md
+index 7bc559b42..4950fc603 100644
+--- README.md
++++ README.md
+@@ -412,11 +412,12 @@ See the [licensing guide](./LICENSING.md) for details.
+ ### Rust
+ 
+ ```sh
+-cargo add purrdf --git https://github.com/Blackcat-Informatics/purrdf.git
++cargo add purrdf
+ ```
+ 
+-The Git dependency uses the current source. Use a released version from
+-crates.io when you need a registry-pinned dependency.
++This example uses the published [PurRDF 5.0.1](https://crates.io/crates/purrdf/5.0.1).
++The install command may select a newer release. Cargo records the selected
++version in `Cargo.lock`.
+ 
+ ```rust
+ use purrdf::{parse_dataset, serialize_dataset, SerializeGraph};
+@@ -440,6 +441,14 @@ Use the facade's `sparql`, `shapes`, `shex`, `datalog`, `entail`, `retrieval`,
+ application grows.
+ [More Rust examples](./docs/book/src/getting-started/rust.md).
+ 
++#### Track development
++
++To build against current repository source, add the Git dependency.
++
++```sh
++cargo add purrdf --git https://github.com/Blackcat-Informatics/purrdf.git
++```
++
+ ### Python
+ 
+ ```sh
+diff --git README_zh.md README_zh.md
+index bced53893..d6237b355 100644
+--- README_zh.md
++++ README_zh.md
+@@ -335,10 +335,11 @@ PurRDF 第一方代码的许可表达式为 `MIT OR Apache-2.0 OR MulanPSL-2.0`
+ ### Rust
+ 
+ ```sh
+-cargo add purrdf --git https://github.com/Blackcat-Informatics/purrdf.git
++cargo add purrdf
+ ```
+ 
+-该 Git 依赖使用当前源码。需要由注册表固定版本的依赖时，请使用 crates.io 上已发布的版本。
++本示例使用已发布的 [PurRDF 5.0.1](https://crates.io/crates/purrdf/5.0.1)。
++安装命令可能选用更新的版本。Cargo 将选用的版本记录在 `Cargo.lock` 中。
+ 
+ ```rust
+ use purrdf::{parse_dataset, serialize_dataset, SerializeGraph};
+@@ -361,6 +362,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
+ `retrieval`、`geo`、`columnar`、`json`、`yaml`、`toml`、`mime` 与 `markdown` 模块。
+ [更多 Rust 示例](./docs/book/src/getting-started/rust.md)。
+ 
++#### 跟踪开发
++
++如需使用仓库当前源码构建，请添加 Git 依赖。
++
++```sh
++cargo add purrdf --git https://github.com/Blackcat-Informatics/purrdf.git
++```
++
+ ### Python
+ 
+ ```sh
+diff --git crates/hash-conformance/benches/digests.rs crates/hash-conformance/benches/digests.rs
+index 1cc3c1db4..5d000b70c 100644
+--- crates/hash-conformance/benches/digests.rs
++++ crates/hash-conformance/benches/digests.rs
+@@ -17,7 +17,7 @@ use purrdf_hash::hex::{
+ use purrdf_hash::md5::Md5;
+ use purrdf_hash::sha2::{Sha256, Sha512};
+ use purrdf_hash::sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
+-use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main};
++use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group};
+ use purrdf_testkit::rng::xorshift64_next;
+ 
+ const SIZES: [(usize, &str); 3] = [(64, "64B"), (1024, "1KiB"), (1 << 20, "1MiB")];
+@@ -337,4 +337,15 @@ fn word_ids(c: &mut Bench) {
+ }
+ 
+ bench_group!(benches, digests, hex, blake3, blake3_backends, word_ids);
+-bench_main!(benches);
++
++#[cfg(target_os = "linux")]
++#[path = "support/blake3_instructions.rs"]
++mod blake3_instructions;
++
++fn main() -> std::process::ExitCode {
++    #[cfg(target_os = "linux")]
++    if blake3_instructions::dispatch() {
++        return std::process::ExitCode::SUCCESS;
++    }
++    purrdf_testkit::bench::main(option_env!("CARGO_TARGET_TMPDIR"), &[benches])
++}
+diff --git crates/hash-conformance/benches/support/blake3_instructions.rs crates/hash-conformance/benches/support/blake3_instructions.rs
+new file mode 100644
+index 000000000..64877fa01
+--- /dev/null
++++ crates/hash-conformance/benches/support/blake3_instructions.rs
+@@ -0,0 +1,160 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Fixed-work retired instruction comparison; an unavailable PMU refuses.
++
++use purrdf_hash::Backend as _;
++use purrdf_hash::blake3::{self, Backend, DeriveKeyContext, Hash};
++use purrdf_testkit::bench::counter::{CounterCommand, CounterControl, collect_instructions};
++use std::{env, hint::black_box, path::Path};
++
++const MESSAGES: usize = 16_384;
++const WIDTH: usize = 16;
++const LENGTHS: &[usize] = &[
++    16, 32, 63, 64, 65, 100, 128, 256, 512, 1024, 1025, 2048, 2049, 3072, 3073, 4096,
++];
++const CONTEXT: &str = "PurRDF BLAKE3 benchmark application context";
++
++fn data(len: usize) -> Vec<u8> {
++    (0..len).map(|i| i.wrapping_mul(29) as u8).collect()
++}
++
++fn vary(i: usize) -> u8 {
++    (i as u8).wrapping_add((i >> 8) as u8)
++}
++
++fn individual(input: &[u8], backend: Option<Backend>) -> Hash {
++    if let Some(path) = backend {
++        path.hash(input).expect("forced backend available")
++    } else {
++        blake3::hash(input)
++    }
++}
++
++fn single(mut input: Vec<u8>, digest: impl Fn(&[u8]) -> [u8; 32]) -> u32 {
++    let mut witness = 0_u32;
++    for i in 0..MESSAGES {
++        input[0] = vary(i);
++        let byte = black_box(digest(black_box(input.as_slice())))[0];
++        witness = witness.wrapping_add(u32::from(byte));
++    }
++    witness
++}
++
++fn grouped(mut rows: [Vec<u8>; WIDTH], backend: Option<Backend>, lanes: bool) -> u32 {
++    let mut witness = 0_u32;
++    let mut output = [Hash::ZERO; WIDTH];
++    for start in (0..MESSAGES).step_by(WIDTH) {
++        for (lane, row) in rows.iter_mut().enumerate() {
++            row[0] = vary(start + lane);
++        }
++        let inputs = core::array::from_fn::<_, WIDTH, _>(|lane| rows[lane].as_slice());
++        let inputs = black_box(&inputs);
++        if lanes {
++            if let Some(path) = backend {
++                path.hash_batch(inputs, &mut output)
++                    .expect("available")
++                    .expect("valid batch");
++            } else {
++                blake3::hash_batch(inputs, &mut output).expect("valid batch");
++            }
++        } else {
++            for (&input, slot) in inputs.iter().zip(&mut output) {
++                *slot = individual(input, backend);
++            }
++        }
++        for digest in black_box(&output) {
++            witness = witness.wrapping_add(u32::from(digest.as_bytes()[0]));
++        }
++    }
++    witness
++}
++
++fn sample(kind: &str, name: &str, len: usize) {
++    let backend = Backend::all_available().find(|b| b.name() == name);
++    assert!(name == "default" || backend.is_some(), "{name}");
++    let one = data(len);
++    let rows = core::array::from_fn(|_| data(len));
++    let context = DeriveKeyContext::new(CONTEXT);
++    let mut counter = CounterControl::required().expect("native retired-instruction counter");
++    counter
++        .command(CounterCommand::Enable)
++        .expect("start counter");
++    let witness = match (kind, backend) {
++        ("single", None) => single(one, |data| *blake3::hash(data).as_bytes()),
++        ("single", Some(path)) => {
++            single(one, |data| *path.hash(data).expect("available").as_bytes())
++        }
++        ("derived", None) => single(one, |data| context.derive(data)),
++        ("grouped" | "batch", _) => grouped(rows, backend, kind == "batch"),
++        _ => panic!("unknown BLAKE3 sample kind {kind}"),
++    };
++    counter
++        .command(CounterCommand::Disable)
++        .expect("stop counter");
++    println!("{witness}");
++}
++
++fn collect(directory: &Path) {
++    let exe = env::current_exe().expect("benchmark executable");
++    std::fs::create_dir(directory).expect("new output directory");
++    println!("length,backend,kind,instructions_0,instructions_1,instructions_2,messages,witness");
++    for &len in LENGTHS {
++        let mut plain = None;
++        for name in std::iter::once("default").chain(Backend::all_available().map(Backend::name)) {
++            let mut kinds = vec!["single", "grouped", "batch"];
++            if name == "default" {
++                kinds.push("derived");
++            }
++            for kind in kinds {
++                let row = collect_row(&exe, directory, kind, name, len);
++                if kind != "derived" {
++                    assert_eq!(&row.1, plain.get_or_insert_with(|| row.1.clone()));
++                }
++                let [a, b, c] = row.0;
++                println!(
++                    "{len},{name},{kind},{a},{b},{c},{MESSAGES},{}",
++                    row.1.trim()
++                );
++            }
++        }
++    }
++}
++
++fn collect_row(
++    exe: &Path,
++    directory: &Path,
++    kind: &str,
++    name: &str,
++    len: usize,
++) -> ([u64; 3], String) {
++    let mut counts = [0; 3];
++    let mut expected = None;
++    for (index, count) in counts.iter_mut().enumerate() {
++        let dir = directory.join(format!("{len}-{name}-{kind}-{index}"));
++        let args = [
++            "--blake3-instruction-sample".into(),
++            kind.into(),
++            name.into(),
++            len.to_string().into(),
++        ];
++        *count = collect_instructions(exe, &args, &dir)
++            .expect("complete counter receipt")
++            .instructions;
++        let witness = std::fs::read_to_string(dir.join("workload.stdout")).expect("sample witness");
++        assert_eq!(&witness, expected.get_or_insert_with(|| witness.clone()));
++    }
++    (counts, expected.expect("three retained samples"))
++}
++
++pub(super) fn dispatch() -> bool {
++    let args: Vec<_> = env::args().skip(1).filter(|arg| arg != "--bench").collect();
++    match args.as_slice() {
++        [command, output] if command == "--blake3-instructions" => collect(Path::new(output)),
++        [command, kind, name, len] if command == "--blake3-instruction-sample" => {
++            sample(kind, name, len.parse().expect("message length"));
++        }
++        _ => return false,
++    }
++    true
++}
+diff --git crates/hash-conformance/tests/blake3.rs crates/hash-conformance/tests/blake3.rs
+index 0c4b3ed1f..a15e7f129 100644
+--- crates/hash-conformance/tests/blake3.rs
++++ crates/hash-conformance/tests/blake3.rs
+@@ -8,6 +8,10 @@ use purrdf_hash::dispatch::{assert_required_available, host_advertises};
+ use purrdf_hash::hex::Lower;
+ use purrdf_testkit::vectors::VectorFile;
+ 
++#[cfg(any(not(target_arch = "wasm32"), target_feature = "simd128"))]
++#[path = "support/blake3_batch.rs"]
++mod batch;
++
+ const VECTORS: &str = include_str!("vectors/blake3_differential_vectors.txt");
+ 
+ fn required_backends_are_available() {
+@@ -469,6 +473,14 @@ fn xof_large_output_and_seek_boundaries() {
+ }
+ 
+ purrdf_testkit::harness_main!(
++    #[cfg(not(target_arch = "wasm32"))]
++    independent_batches_match_portable_through_two_chunks,
++    #[cfg(not(target_arch = "wasm32"))]
++    independent_batches_replay_all_admitted_official_vectors,
++    #[cfg(not(target_arch = "wasm32"))]
++    refusal_leaves_every_batch_slot_intact,
++    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
++    mixed_message_batch_simd_dispatch,
+     derived_context_trees_match_across_backends,
+     official_modes_and_extended_output,
+     xof_large_output_and_seek_boundaries,
+@@ -480,3 +492,12 @@ purrdf_testkit::harness_main!(
+     streaming_answers_match,
+     snapshots_and_reset_preserve_message_boundaries,
+ );
++
++#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
++use batch::mixed_message_batch_simd_dispatch;
++#[cfg(not(target_arch = "wasm32"))]
++use batch::{
++    independent_batches_match_portable_through_two_chunks,
++    independent_batches_replay_all_admitted_official_vectors,
++    refusal_leaves_every_batch_slot_intact,
++};
+diff --git crates/hash-conformance/tests/support/blake3_batch.rs crates/hash-conformance/tests/support/blake3_batch.rs
+new file mode 100644
+index 000000000..4a65b2565
+--- /dev/null
++++ crates/hash-conformance/tests/support/blake3_batch.rs
+@@ -0,0 +1,159 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Independent lane identity across unequal message, block and tree lengths.
++
++use super::{OFFICIAL_CONTEXT, OFFICIAL_KEY};
++use purrdf_hash::Backend as _;
++use purrdf_hash::blake3::{self, Backend, DeriveKeyContext, Hash};
++
++#[cfg(not(target_arch = "wasm32"))]
++pub(super) fn independent_batches_match_portable_through_two_chunks() {
++    let data = super::corpus();
++    let context = DeriveKeyContext::new(OFFICIAL_CONTEXT);
++    // The permutation mixes lengths within each SIMD group while visiting
++    // every length exactly once. Shift each start to exercise unaligned loads.
++    let inputs: Vec<_> = (0..2049)
++        .map(|i| {
++            let len = i * 787 % 2049;
++            let start = i % 31;
++            &data[start..start + len]
++        })
++        .collect();
++    compare_modes(&inputs, &context, Backend::all_available());
++}
++
++fn modes(inputs: &[&[u8]], context: &DeriveKeyContext, backend: Option<Backend>) -> [Vec<Hash>; 3] {
++    let mut out = core::array::from_fn(|_| vec![Hash::ZERO; inputs.len()]);
++    if let Some(backend) = backend {
++        backend.hash_batch(inputs, &mut out[0]).unwrap().unwrap();
++        backend
++            .keyed_hash_batch(OFFICIAL_KEY, inputs, &mut out[1])
++            .unwrap()
++            .unwrap();
++        backend
++            .derive_key_batch(context, inputs, &mut out[2])
++            .unwrap()
++            .unwrap();
++    } else {
++        blake3::hash_batch(inputs, &mut out[0]).unwrap();
++        blake3::keyed_hash_batch(OFFICIAL_KEY, inputs, &mut out[1]).unwrap();
++        context.derive_batch(inputs, &mut out[2]).unwrap();
++    }
++    out
++}
++
++fn compare_modes(
++    inputs: &[&[u8]],
++    context: &DeriveKeyContext,
++    paths: impl IntoIterator<Item = Backend>,
++) {
++    let expected = modes(inputs, context, Some(Backend::Portable));
++    assert_eq!(modes(inputs, context, None), expected, "default dispatch");
++    for path in paths {
++        assert_eq!(modes(inputs, context, Some(path)), expected, "{path:?}");
++    }
++}
++
++#[cfg(not(target_arch = "wasm32"))]
++pub(super) fn independent_batches_replay_all_admitted_official_vectors() {
++    let context = DeriveKeyContext::new(OFFICIAL_CONTEXT);
++    let data = super::corpus();
++    let available: Vec<_> = Backend::all_available().collect();
++    replay_official_batches(&data, &context, &available, 16);
++    // These mixed groups force the three- and four-chunk reductions, which
++    // must coexist with a single-block root in the very same group.
++    let boundaries = [4096, 0, 3073, 1025, 2049, 1, 3072, 2048, 1024, 65, 64, 63];
++    let mixed: Vec<_> = boundaries
++        .map(|n| &data[..n])
++        .into_iter()
++        .cycle()
++        .take(33)
++        .collect();
++    compare_modes(&mixed, &context, available);
++}
++
++fn replay_official_batches(
++    data: &[u8],
++    context: &DeriveKeyContext,
++    paths: &[Backend],
++    max_width: usize,
++) {
++    use purrdf_hash::hex::Lower;
++    use purrdf_testkit::vectors::VectorFile;
++
++    let vectors = VectorFile::load(super::OFFICIAL);
++    let records: Vec<_> = vectors
++        .records()
++        .iter()
++        .filter_map(|record| {
++            let len = record.fields[0]
++                .parse::<usize>()
++                .expect("official vector length");
++            (len <= blake3::MAX_BATCH_MESSAGE).then(|| (&data[..len], &record.fields[1..]))
++        })
++        .collect();
++    // Every full width and partial width, including force-selected SIMD.
++    for width in 1..=max_width {
++        for batch in records.chunks(width) {
++            let inputs: Vec<_> = batch.iter().map(|(data, _)| *data).collect();
++            for &path in paths {
++                let outputs = modes(&inputs, context, Some(path));
++                for (lane, (_, expected)) in batch.iter().enumerate() {
++                    for (mode, out) in outputs.iter().enumerate() {
++                        assert_eq!(
++                            Lower(out[lane].as_bytes()).to_string(),
++                            expected[mode][..64]
++                        );
++                    }
++                    assert_eq!(context.derive(inputs[lane]), *outputs[2][lane].as_bytes());
++                }
++            }
++        }
++    }
++}
++
++#[cfg(not(target_arch = "wasm32"))]
++pub(super) fn refusal_leaves_every_batch_slot_intact() {
++    use blake3::{BatchError, MAX_BATCH_MESSAGE, hash_batch};
++
++    let boundary = vec![1; MAX_BATCH_MESSAGE + 1];
++    let mut out = [Hash::ZERO; 2];
++    assert_eq!(
++        hash_batch(&[b"valid", &boundary], &mut out),
++        Err(BatchError::MessageLength {
++            index: 1,
++            bytes: MAX_BATCH_MESSAGE + 1
++        })
++    );
++    assert_eq!(
++        hash_batch(&[b"valid"], &mut out),
++        Err(BatchError::OutputCount {
++            messages: 1,
++            slots: 2
++        })
++    );
++    assert_eq!(out, [Hash::ZERO; 2]);
++    hash_batch(&[b"valid", &boundary[..MAX_BATCH_MESSAGE]], &mut out).unwrap();
++    assert_eq!(
++        out,
++        [
++            blake3::hash(b"valid"),
++            blake3::hash(&boundary[..MAX_BATCH_MESSAGE])
++        ]
++    );
++}
++
++#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
++pub(super) fn mixed_message_batch_simd_dispatch() {
++    assert_eq!(Backend::selected(), Backend::Wasm128);
++    let data = super::corpus();
++    let context = DeriveKeyContext::new(OFFICIAL_CONTEXT);
++    replay_official_batches(&data, &context, &[Backend::Wasm128], 4);
++    let lengths = [4096, 0, 3073, 1025, 65];
++    compare_modes(
++        &lengths.map(|len| &data[1..1 + len]),
++        &context,
++        [Backend::Wasm128],
++    );
++}
+diff --git crates/hash/src/arch/blake3_avx2.rs crates/hash/src/arch/blake3_avx2.rs
+index 3eb300a5e..77c9ba217 100644
+--- crates/hash/src/arch/blake3_avx2.rs
++++ crates/hash/src/arch/blake3_avx2.rs
+@@ -116,5 +116,6 @@ fn load_block(bytes: &[u8; 8192], block: usize) -> [V; 16] {
+     out
+ }
+ super::blake3_lanes::blake3_lanes!("avx2", 8);
++super::blake3_lanes::blake3_messages!("avx2", 8, lane_compress);
+ 
+ use core::arch::x86_64::{_mm256_setr_epi8, _mm256_shuffle_epi8};
+diff --git crates/hash/src/arch/blake3_lanes.rs crates/hash/src/arch/blake3_lanes.rs
+index cad3aff81..97e422af4 100644
+--- crates/hash/src/arch/blake3_lanes.rs
++++ crates/hash/src/arch/blake3_lanes.rs
+@@ -191,6 +191,147 @@ macro_rules! blake3_lanes {
+ }
+ pub(crate) use blake3_lanes;
+ 
++// Each live lane is an independent message. The exact same vector arithmetic
++// also compresses its parent nodes, without a scalar detour for mixed lengths.
++macro_rules! blake3_messages {
++    ($feature:literal, $width:literal, $compress:ident) => {
++        use crate::blake3::{CHUNK, END, Hash, PARENT, ROOT, START};
++
++        #[target_feature(enable = $feature)]
++        pub(super) fn messages(inputs: &[&[u8]], mode: crate::blake3::Mode, out: &mut [Hash]) {
++            for (inputs, out) in inputs.chunks($width).zip(out.chunks_mut($width)) {
++                let lengths: [usize; $width] = core::array::from_fn(|lane| {
++                    inputs
++                        .get(lane)
++                        .map_or(0, |s| s.len().div_ceil(CHUNK).max(1))
++                });
++                // A group is nonempty and the public entry admits at most four chunks.
++                let count = lengths.iter().copied().max().unwrap_or(0);
++                let mut chunks = [[V::splat(0); 8]; 4];
++                for (index, cv) in chunks[..count].iter_mut().enumerate() {
++                    *cv = message_chunk(inputs, &lengths, index, mode);
++                }
++                let root = message_root(chunks, &lengths, count, mode);
++                let words = root.map(|column| column.array());
++                for (lane, digest) in out.iter_mut().enumerate() {
++                    *digest = Hash::from_cv(core::array::from_fn(|word| words[word][lane]));
++                }
++            }
++        }
++
++        #[target_feature(enable = $feature)]
++        fn message_chunk(
++            inputs: &[&[u8]],
++            lengths: &[usize; $width],
++            chunk: usize,
++            mode: crate::blake3::Mode,
++        ) -> [V; 8] {
++            let mut padded = [0; CHUNK * $width];
++            let mut last = [0; $width];
++            let mut blocks = [0; $width];
++            for (lane, &input) in inputs.iter().enumerate() {
++                if chunk >= lengths[lane] {
++                    continue;
++                }
++                let offset = chunk * CHUNK;
++                let bytes = &input[offset..input.len().min(offset + CHUNK)];
++                let start = lane * CHUNK;
++                padded[start..start + bytes.len()].copy_from_slice(bytes);
++                blocks[lane] = bytes.len().div_ceil(64).max(1);
++                last[lane] = bytes.len() - (blocks[lane] - 1) * 64;
++            }
++            let max = blocks.iter().copied().max().unwrap_or(0);
++            let whole = blocks.iter().copied().min().unwrap_or(0);
++            let mut cv = mode.key.map(|word| V::splat(word));
++            let low = V::splat(chunk as u32);
++            let high = V::splat(0);
++            for block in 0..max {
++                let words = load_block(&padded, block);
++                let flags = V::load(core::array::from_fn(|lane| {
++                    let mut flags = mode.flags | if block == 0 { START } else { 0 };
++                    if block + 1 == blocks[lane] {
++                        flags |= END;
++                        if lengths[lane] == 1 {
++                            flags |= ROOT;
++                        }
++                    }
++                    flags
++                }));
++                let size = V::load(core::array::from_fn(|lane| {
++                    if block + 1 == blocks[lane] {
++                        last[lane] as u32
++                    } else {
++                        64
++                    }
++                }));
++                let next = $compress!(cv, words, low, high, size, flags);
++                if block < whole {
++                    cv = next;
++                } else {
++                    let live = V::load(blocks.map(|n| if block < n { u32::MAX } else { 0 }));
++                    for i in 0..8 {
++                        cv[i] = cv[i].select(live, next[i]);
++                    }
++                }
++            }
++            cv
++        }
++
++        #[target_feature(enable = $feature)]
++        fn message_root(
++            [first, second, third, fourth]: [[V; 8]; 4],
++            lengths: &[usize; $width],
++            count: usize,
++            mode: crate::blake3::Mode,
++        ) -> [V; 8] {
++            if count == 1 {
++                return first;
++            }
++            let mut left = first;
++            let mut right = second;
++            if count >= 3 {
++                let pair = message_parent(first, second, mode, 0);
++                let has_third = V::load(lengths.map(|n| if n >= 3 { u32::MAX } else { 0 }));
++                let end = if count == 4 {
++                    let pair = message_parent(third, fourth, mode, 0);
++                    let has_fourth = V::load(lengths.map(|n| if n == 4 { u32::MAX } else { 0 }));
++                    core::array::from_fn(|i| third[i].select(has_fourth, pair[i]))
++                } else {
++                    third
++                };
++                for i in 0..8 {
++                    left[i] = first[i].select(has_third, pair[i]);
++                    right[i] = second[i].select(has_third, end[i]);
++                }
++            }
++            let root = message_parent(left, right, mode, ROOT);
++            let multiple = V::load(lengths.map(|n| if n >= 2 { u32::MAX } else { 0 }));
++            core::array::from_fn(|i| first[i].select(multiple, root[i]))
++        }
++
++        #[target_feature(enable = $feature)]
++        fn message_parent(
++            left: [V; 8],
++            right: [V; 8],
++            mode: crate::blake3::Mode,
++            flags: u32,
++        ) -> [V; 8] {
++            let mut words = [V::splat(0); 16];
++            words[..8].copy_from_slice(&left);
++            words[8..].copy_from_slice(&right);
++            $compress!(
++                mode.key.map(|word| V::splat(word)),
++                words,
++                V::splat(0),
++                V::splat(0),
++                V::splat(64),
++                V::splat(mode.flags | PARENT | flags)
++            )
++        }
++    };
++}
++pub(crate) use blake3_messages;
++
+ macro_rules! blake3_single4 {
+     ($feature:literal) => {
+         /// One block: four independent quarter rounds occupy four SIMD lanes.
+diff --git crates/hash/src/arch/blake3_neon.rs crates/hash/src/arch/blake3_neon.rs
+index 97b808baa..61c797d3a 100644
+--- crates/hash/src/arch/blake3_neon.rs
++++ crates/hash/src/arch/blake3_neon.rs
+@@ -78,6 +78,7 @@ fn load_block(bytes: &[u8; 4096], block: usize) -> [V; 16] {
+     out
+ }
+ super::blake3_lanes::blake3_lanes!("neon", 4);
++super::blake3_lanes::blake3_messages!("neon", 4, lane_compress);
+ 
+ use core::arch::aarch64::vextq_u32;
+ impl V {
+diff --git crates/hash/src/arch/blake3_sse2.rs crates/hash/src/arch/blake3_sse2.rs
+index a3e7778d0..4fc67f6e5 100644
+--- crates/hash/src/arch/blake3_sse2.rs
++++ crates/hash/src/arch/blake3_sse2.rs
+@@ -109,6 +109,7 @@ macro_rules! rotate_sse2 {
+ }
+ four_words!("sse2", rotate_sse2);
+ super::blake3_lanes::blake3_lanes!("sse2", 4);
++super::blake3_lanes::blake3_messages!("sse2", 4, lane_compress);
+ 
+ use intrinsics::_mm_shuffle_epi32;
+ impl V {
+diff --git crates/hash/src/arch/blake3_wasm.rs crates/hash/src/arch/blake3_wasm.rs
+index 3095fbd82..399edd41e 100644
+--- crates/hash/src/arch/blake3_wasm.rs
++++ crates/hash/src/arch/blake3_wasm.rs
+@@ -110,6 +110,7 @@ fn load_block(bytes: &[u8; 4096], block: usize) -> [V; 16] {
+     out
+ }
+ super::blake3_lanes::blake3_lanes!("simd128", 4);
++super::blake3_lanes::blake3_messages!("simd128", 4, lane_compress);
+ 
+ impl V {
+     #[inline]
+diff --git crates/hash/src/arch/blake3_x86.rs crates/hash/src/arch/blake3_x86.rs
+index 10b26a1e9..ed5207253 100644
+--- crates/hash/src/arch/blake3_x86.rs
++++ crates/hash/src/arch/blake3_x86.rs
+@@ -431,6 +431,100 @@ macro_rules! wide {
+     }};
+ }
+ 
++use core::arch::x86_64::{__m512i as MessageVector, _mm512_and_si512};
++
++#[derive(Clone, Copy)]
++struct V(MessageVector);
++
++impl V {
++    #[inline]
++    #[target_feature(enable = "avx512f")]
++    fn splat(word: u32) -> Self {
++        Self(_mm512_set1_epi32(word as i32))
++    }
++
++    #[inline]
++    #[target_feature(enable = "avx512f")]
++    fn load(words: [u32; 16]) -> Self {
++        // SAFETY: one unaligned full vector is inside the array.
++        Self(unsafe { _mm512_loadu_si512(words.as_ptr().cast()) })
++    }
++
++    #[inline]
++    #[target_feature(enable = "avx512f")]
++    fn array(self) -> [u32; 16] {
++        let mut words = [0; 16];
++        // SAFETY: one unaligned full vector fits the destination array.
++        unsafe { core::arch::x86_64::_mm512_storeu_si512(words.as_mut_ptr().cast(), self.0) };
++        words
++    }
++
++    #[inline]
++    #[target_feature(enable = "avx512f")]
++    fn select(self, mask: Self, yes: Self) -> Self {
++        Self(_mm512_xor_si512(
++            self.0,
++            _mm512_and_si512(mask.0, _mm512_xor_si512(self.0, yes.0)),
++        ))
++    }
++}
++
++#[inline]
++#[target_feature(enable = "avx512f")]
++fn load_block(bytes: &[u8; 16384], block: usize) -> [V; 16] {
++    assert!(block < 16);
++    let rows = core::array::from_fn(|lane| {
++        // SAFETY: each unaligned load stays within one full padded block.
++        unsafe { _mm512_loadu_si512(bytes.as_ptr().add(lane * 1024 + block * 64).cast()) }
++    });
++    transpose16(&rows).map(V)
++}
++
++macro_rules! message_wide {
++    ($cv:expr, $words:expr, $lo:expr, $hi:expr, $size:expr, $flags:expr) => {{
++        wide!(
++            $cv.map(|word| word.0),
++            $words.map(|word| word.0),
++            $lo.0,
++            $hi.0,
++            $size.0,
++            $flags.0
++        )
++        .map(V)
++    }};
++}
++super::blake3_lanes::blake3_messages!("avx512f", 16, message_wide);
++
++/// Convert block rows to sixteen independent lanes per message word.
++#[inline]
++#[target_feature(enable = "avx512f")]
++fn transpose16(rows: &[MessageVector; 16]) -> [MessageVector; 16] {
++    let mut pairs = [_mm512_setzero_si512(); 16];
++    for i in (0..16).step_by(2) {
++        pairs[i] = _mm512_unpacklo_epi32(rows[i], rows[i + 1]);
++        pairs[i + 1] = _mm512_unpackhi_epi32(rows[i], rows[i + 1]);
++    }
++    let mut groups = [_mm512_setzero_si512(); 16];
++    for i in (0..16).step_by(4) {
++        groups[i] = _mm512_unpacklo_epi64(pairs[i], pairs[i + 2]);
++        groups[i + 1] = _mm512_unpackhi_epi64(pairs[i], pairs[i + 2]);
++        groups[i + 2] = _mm512_unpacklo_epi64(pairs[i + 1], pairs[i + 3]);
++        groups[i + 3] = _mm512_unpackhi_epi64(pairs[i + 1], pairs[i + 3]);
++    }
++    let mut m = [_mm512_setzero_si512(); 16];
++    for col in 0..4 {
++        let a = _mm512_shuffle_i32x4::<0x44>(groups[col], groups[col + 4]);
++        let b = _mm512_shuffle_i32x4::<0x44>(groups[col + 8], groups[col + 12]);
++        let c = _mm512_shuffle_i32x4::<0xee>(groups[col], groups[col + 4]);
++        let d = _mm512_shuffle_i32x4::<0xee>(groups[col + 8], groups[col + 12]);
++        m[col] = _mm512_shuffle_i32x4::<0x88>(a, b);
++        m[col + 4] = _mm512_shuffle_i32x4::<0xdd>(a, b);
++        m[col + 8] = _mm512_shuffle_i32x4::<0x88>(c, d);
++        m[col + 12] = _mm512_shuffle_i32x4::<0xdd>(c, d);
++    }
++    m
++}
++
+ #[inline]
+ #[target_feature(enable = "avx512f")]
+ unsafe fn chunk_columns16(
+@@ -466,30 +560,7 @@ unsafe fn chunk_columns16(
+                 )
+             };
+         }
+-        // Transpose sixteen contiguous block loads into word-parallel lanes.
+-        let mut pairs = [_mm512_setzero_si512(); 16];
+-        for i in (0..16).step_by(2) {
+-            pairs[i] = _mm512_unpacklo_epi32(rows[i], rows[i + 1]);
+-            pairs[i + 1] = _mm512_unpackhi_epi32(rows[i], rows[i + 1]);
+-        }
+-        let mut groups = [_mm512_setzero_si512(); 16];
+-        for i in (0..16).step_by(4) {
+-            groups[i] = _mm512_unpacklo_epi64(pairs[i], pairs[i + 2]);
+-            groups[i + 1] = _mm512_unpackhi_epi64(pairs[i], pairs[i + 2]);
+-            groups[i + 2] = _mm512_unpacklo_epi64(pairs[i + 1], pairs[i + 3]);
+-            groups[i + 3] = _mm512_unpackhi_epi64(pairs[i + 1], pairs[i + 3]);
+-        }
+-        let mut m = [_mm512_setzero_si512(); 16];
+-        for col in 0..4 {
+-            let a = _mm512_shuffle_i32x4::<0x44>(groups[col], groups[col + 4]);
+-            let b = _mm512_shuffle_i32x4::<0x44>(groups[col + 8], groups[col + 12]);
+-            let c = _mm512_shuffle_i32x4::<0xee>(groups[col], groups[col + 4]);
+-            let d = _mm512_shuffle_i32x4::<0xee>(groups[col + 8], groups[col + 12]);
+-            m[col] = _mm512_shuffle_i32x4::<0x88>(a, b);
+-            m[col + 4] = _mm512_shuffle_i32x4::<0xdd>(a, b);
+-            m[col + 8] = _mm512_shuffle_i32x4::<0x88>(c, d);
+-            m[col + 12] = _mm512_shuffle_i32x4::<0xdd>(c, d);
+-        }
++        let m = transpose16(&rows);
+         cv = wide!(
+             cv,
+             m,
+@@ -731,30 +802,7 @@ unsafe fn parents16_inner(children: &[[u32; 8]; 32], mode: crate::blake3::Mode)
+     let rows: [_; 16] = core::array::from_fn(|i| unsafe {
+         _mm512_loadu_si512(children.as_ptr().add(i * 2).cast())
+     });
+-    // Transpose sixteen contiguous block loads into word-parallel lanes.
+-    let mut pairs = [_mm512_setzero_si512(); 16];
+-    for i in (0..16).step_by(2) {
+-        pairs[i] = _mm512_unpacklo_epi32(rows[i], rows[i + 1]);
+-        pairs[i + 1] = _mm512_unpackhi_epi32(rows[i], rows[i + 1]);
+-    }
+-    let mut groups = [_mm512_setzero_si512(); 16];
+-    for i in (0..16).step_by(4) {
+-        groups[i] = _mm512_unpacklo_epi64(pairs[i], pairs[i + 2]);
+-        groups[i + 1] = _mm512_unpackhi_epi64(pairs[i], pairs[i + 2]);
+-        groups[i + 2] = _mm512_unpacklo_epi64(pairs[i + 1], pairs[i + 3]);
+-        groups[i + 3] = _mm512_unpackhi_epi64(pairs[i + 1], pairs[i + 3]);
+-    }
+-    let mut m = [_mm512_setzero_si512(); 16];
+-    for col in 0..4 {
+-        let a = _mm512_shuffle_i32x4::<0x44>(groups[col], groups[col + 4]);
+-        let b = _mm512_shuffle_i32x4::<0x44>(groups[col + 8], groups[col + 12]);
+-        let c = _mm512_shuffle_i32x4::<0xee>(groups[col], groups[col + 4]);
+-        let d = _mm512_shuffle_i32x4::<0xee>(groups[col + 8], groups[col + 12]);
+-        m[col] = _mm512_shuffle_i32x4::<0x88>(a, b);
+-        m[col + 4] = _mm512_shuffle_i32x4::<0xdd>(a, b);
+-        m[col + 8] = _mm512_shuffle_i32x4::<0x88>(c, d);
+-        m[col + 12] = _mm512_shuffle_i32x4::<0xdd>(c, d);
+-    }
++    let m = transpose16(&rows);
+ 
+     let initial: [_; 8] = core::array::from_fn(|i| _mm512_set1_epi32(mode.key[i] as i32));
+     let cv = wide!(
+diff --git crates/hash/src/arch/mod.rs crates/hash/src/arch/mod.rs
+index 4f5a20408..5b2a8b568 100644
+--- crates/hash/src/arch/mod.rs
++++ crates/hash/src/arch/mod.rs
+@@ -330,6 +330,57 @@ pub(crate) fn blake3_compress_on<const OUTPUT: usize>(
+     }
+ }
+ 
++pub(crate) fn blake3_messages_on(
++    backend: crate::blake3::Backend,
++    inputs: &[&[u8]],
++    mode: crate::blake3::Mode,
++    out: &mut [crate::blake3::Hash],
++) -> Option<()> {
++    use crate::dispatch::Backend as _;
++    if !backend.is_available() {
++        return None;
++    }
++    match backend {
++        #[cfg(target_arch = "x86_64")]
++        crate::blake3::Backend::Avx512 => {
++            // SAFETY: the checked backend requires AVX-512F and VL.
++            unsafe { blake3_x86::messages(inputs, mode, out) };
++            Some(())
++        }
++        #[cfg(target_arch = "x86_64")]
++        crate::blake3::Backend::Avx2 => {
++            // SAFETY: the checked backend requires AVX2.
++            unsafe { blake3_avx2::messages(inputs, mode, out) };
++            Some(())
++        }
++        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
++        crate::blake3::Backend::Sse2 | crate::blake3::Backend::Ssse3 => {
++            // SAFETY: SSE2 was checked, or is implied by detected SSSE3.
++            unsafe { blake3_sse2::messages(inputs, mode, out) };
++            Some(())
++        }
++        #[cfg(all(
++            target_arch = "aarch64",
++            target_feature = "neon",
++            target_endian = "little"
++        ))]
++        crate::blake3::Backend::Neon => {
++            // SAFETY: the target enables little-endian NEON.
++            unsafe { blake3_neon::messages(inputs, mode, out) };
++            Some(())
++        }
++        #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
++        crate::blake3::Backend::Wasm128 => {
++            blake3_wasm::messages(inputs, mode, out);
++            Some(())
++        }
++        _ => {
++            let _ = (inputs, mode, out);
++            None
++        }
++    }
++}
++
+ pub(crate) fn blake3_parents4(
+     children: &[[u32; 8]; 8],
+     mode: crate::blake3::Mode,
+diff --git crates/hash/src/blake3.rs crates/hash/src/blake3.rs
+index 3b033b6db..c823fb988 100644
+--- crates/hash/src/blake3.rs
++++ crates/hash/src/blake3.rs
+@@ -162,22 +162,21 @@ impl Mode {
+             key: IV,
+             flags: DERIVE_KEY_CONTEXT,
+         };
+-        // Default contexts use the complete ordinary dispatcher, including
+-        // SIMD chunk batches for long contexts and scalar short roots on x86.
+-        // Explicit backend streams keep their named kernel for every block.
++        // Default contexts use the ordinary one-shot dispatcher. Explicit
++        // backend streams keep their named kernel for every context block.
+         let context_key = match forced_backend {
+             Some(backend) => hash_on(context.as_bytes(), backend, context_mode),
+-            None => hash_mode(context.as_bytes(), context_mode),
++            None => hash_mode(context.as_bytes(), &context_mode),
+         };
+         Self::keyed(context_key.as_bytes(), DERIVE_KEY_MATERIAL)
+     }
+ }
+ 
+-const START: u32 = 1;
+-const END: u32 = 2;
+-const PARENT: u32 = 4;
+-const ROOT: u32 = 8;
+-const CHUNK: usize = 1024;
++pub(crate) const START: u32 = 1;
++pub(crate) const END: u32 = 2;
++pub(crate) const PARENT: u32 = 4;
++pub(crate) const ROOT: u32 = 8;
++pub(crate) const CHUNK: usize = 1024;
+ const KEYED_HASH: u32 = 16;
+ const DERIVE_KEY_CONTEXT: u32 = 32;
+ const DERIVE_KEY_MATERIAL: u32 = 64;
+@@ -300,11 +299,7 @@ impl Output {
+     fn root(self, backend: Backend) -> Hash {
+         let cv: [u32; 8] =
+             backend.compress(self.cv, &self.words, 0, self.length, self.flags | ROOT);
+-        let mut bytes = [0; 32];
+-        for (dest, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(cv) {
+-            dest.copy_from_slice(&word.to_le_bytes());
+-        }
+-        Hash(bytes)
++        Hash::from_cv(cv)
+     }
+ }
+ #[inline]
+@@ -416,6 +411,18 @@ impl std::io::Read for OutputReader {
+ #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+ pub struct Hash([u8; 32]);
+ impl Hash {
++    /// Zero bytes for initializing caller-owned batch output, not the empty-message hash.
++    pub const ZERO: Self = Self([0; 32]);
++
++    #[inline]
++    pub(crate) fn from_cv(cv: [u32; 8]) -> Self {
++        let mut bytes = [0; 32];
++        for (dest, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(cv) {
++            dest.copy_from_slice(&word.to_le_bytes());
++        }
++        Self(bytes)
++    }
++
+     /// The digest bytes.
+     #[must_use]
+     pub const fn as_bytes(&self) -> &[u8; 32] {
+@@ -496,10 +503,8 @@ impl<const BUFFER: usize> Streaming<BUFFER> {
+     #[must_use]
+     pub fn new() -> Self {
+         let mut stream = Self::on(Backend::selected());
+-        // Scalar quarter rounds expose four independent dependency chains to
+-        // x86's scheduler. Within-block SIMD serializes them into one vector
+-        // chain; measured short roots are faster with scalar ARX. Explicitly
+-        // forced streams keep the requested kernel for differential coverage.
++        // Preserve the stream's existing tail policy. One-shot selection is
++        // measured separately, and forced streams retain the requested kernel.
+         stream.short_backend = short_backend(stream.backend);
+         stream
+     }
+@@ -774,7 +779,7 @@ impl<const BUFFER: usize> crate::Digest for Streaming<BUFFER> {
+ #[must_use]
+ #[inline]
+ pub fn hash(data: &[u8]) -> Hash {
+-    hash_mode(data, Mode::HASH)
++    hash_mode(data, &Mode::HASH)
+ }
+ 
+ fn short_backend(backend: Backend) -> Backend {
+@@ -785,20 +790,32 @@ fn short_backend(backend: Backend) -> Backend {
+     }
+ }
+ 
+-fn hash_mode(data: &[u8], mode: Mode) -> Hash {
+-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+-    if data.len() <= CHUNK {
+-        return hash_on(data, Backend::Portable, mode);
+-    }
++fn hash_mode(data: &[u8], mode: &Mode) -> Hash {
+     let backend = Backend::selected();
+-    let short = short_backend(backend);
+-    if data.len() <= CHUNK {
+-        hash_on(data, short, mode)
++    let one_shot = one_shot_backend(backend, data.len());
++    if data.len() <= MAX_BATCH_MESSAGE {
++        hash_on(data, one_shot, *mode)
+     } else {
+-        tree_output(data, 0, backend, mode).root(short)
++        tree_output(data, 0, one_shot, *mode).root(short_backend(backend))
+     }
+ }
+ 
++/// x86-64 instruction counts favor the AVX2 block kernel for one chunk and
++/// the AVX-512 complete tree for two through four. With AVX2 but no AVX-512,
++/// the four-lane chunk path avoids padding to eight for those small trees.
++/// Other architectures keep the detected backend for one-shot hashing.
++fn one_shot_backend(backend: Backend, len: usize) -> Backend {
++    if cfg!(target_arch = "x86_64") {
++        if len <= CHUNK && backend == Backend::Avx512 && Backend::Avx2.is_available() {
++            return Backend::Avx2;
++        }
++        if len > CHUNK && len <= MAX_BATCH_MESSAGE && backend == Backend::Avx2 {
++            return Backend::Sse2;
++        }
++    }
++    backend
++}
++
+ #[inline]
+ fn hash_on(data: &[u8], backend: Backend, mode: Mode) -> Hash {
+     if data.len() <= 64 {
+@@ -809,11 +826,15 @@ fn hash_on(data: &[u8], backend: Backend, mode: Mode) -> Hash {
+             data.len() as u32,
+             mode.flags | START | END | ROOT,
+         );
+-        let mut bytes = [0; 32];
+-        for (dest, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(cv) {
+-            dest.copy_from_slice(&word.to_le_bytes());
+-        }
+-        return Hash(bytes);
++        return Hash::from_cv(cv);
++    }
++    #[cfg(target_arch = "x86")]
++    if backend == Backend::Sse2 && (CHUNK + 1..=2 * CHUNK).contains(&data.len()) {
++        // Two real chunks cost less than padding them to four parallel lanes.
++        let (left, right) = data.split_at(CHUNK);
++        let left = chunk(left, 0, backend, mode).chaining(backend);
++        let right = chunk(right, 1, backend, mode).chaining(backend);
++        return parent(left, right, mode).root(backend);
+     }
+     tree_output(data, 0, backend, mode).root(backend)
+ }
+@@ -821,15 +842,19 @@ fn hash_on(data: &[u8], backend: Backend, mode: Mode) -> Hash {
+ /// Authenticate bytes with a 256-bit BLAKE3 key.
+ #[must_use]
+ pub fn keyed_hash(key: &[u8; 32], data: &[u8]) -> Hash {
+-    hash_mode(data, Mode::keyed(key, KEYED_HASH))
++    hash_mode(data, &Mode::keyed(key, KEYED_HASH))
+ }
+ 
+ /// Derive 32 key bytes using an application-specific context and key material.
++/// This hashes the context on each call. Use [`DeriveKeyContext`] for reuse.
+ #[must_use]
+ pub fn derive_key(context: &str, key_material: &[u8]) -> [u8; 32] {
+-    *hash_mode(key_material, Mode::derive(context, None)).as_bytes()
++    DeriveKeyContext::new(context).derive(key_material)
+ }
+ 
++mod batch;
++pub use batch::{BatchError, DeriveKeyContext, MAX_BATCH_MESSAGE, hash_batch, keyed_hash_batch};
++
+ /// Fill caller storage with the unkeyed BLAKE3 output prefix.
+ pub fn hash_xof(data: &[u8], out: &mut [u8]) {
+     mode_xof(data, out, Mode::HASH);
+diff --git crates/hash/src/blake3/batch.rs crates/hash/src/blake3/batch.rs
+new file mode 100644
+index 000000000..05d840288
+--- /dev/null
++++ crates/hash/src/blake3/batch.rs
+@@ -0,0 +1,190 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Admission and mode selection for independent-message BLAKE3.
++
++use super::{Backend, CHUNK, Hash, KEYED_HASH, Mode, hash_mode, hash_on};
++use crate::dispatch::Backend as _;
++
++/// Maximum bytes per independent message in a batch. Longer messages can use
++/// the one-shot and streaming APIs.
++pub const MAX_BATCH_MESSAGE: usize = 4 * CHUNK;
++
++/// Refusal to hash a batch. Both failures leave the output unchanged.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++#[non_exhaustive]
++pub enum BatchError {
++    /// The caller must provide one output slot per message.
++    OutputCount {
++        /// Number of input messages.
++        messages: usize,
++        /// Number of output slots.
++        slots: usize,
++    },
++    /// One message exceeds [`MAX_BATCH_MESSAGE`].
++    MessageLength {
++        /// Zero-based input index.
++        index: usize,
++        /// Rejected message length.
++        bytes: usize,
++    },
++}
++
++impl core::fmt::Display for BatchError {
++    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        match self {
++            Self::OutputCount { messages, slots } => {
++                write!(
++                    f,
++                    "BLAKE3 batch has {messages} messages and {slots} output slots"
++                )
++            }
++            Self::MessageLength { index, bytes } => {
++                write!(
++                    f,
++                    "BLAKE3 batch message {index} has {bytes} bytes, limit {MAX_BATCH_MESSAGE}"
++                )
++            }
++        }
++    }
++}
++impl core::error::Error for BatchError {}
++impl crate::error::StructuredError for BatchError {
++    crate::error_visit! {
++        OutputCount { messages, slots } => "blake3-batch-output-count" {
++            "messages" => Unsigned(*messages as u128), "slots" => Unsigned(*slots as u128)
++        },
++        MessageLength { index, bytes } => "blake3-batch-message-length" {
++            "index" => Unsigned(*index as u128), "bytes" => Unsigned(*bytes as u128)
++        },
++    }
++}
++
++/// A reusable BLAKE3 derive-key context. Hashes the application-specific
++/// context string once and stores only its derived key.
++#[derive(Clone)]
++pub struct DeriveKeyContext(Mode);
++
++impl DeriveKeyContext {
++    /// Prepare a unique application context, not a password salt.
++    #[must_use]
++    pub fn new(context: &str) -> Self {
++        Self(Mode::derive(context, None))
++    }
++
++    /// Derive 32 bytes without rehashing the context.
++    #[must_use]
++    #[inline]
++    pub fn derive(&self, material: &[u8]) -> [u8; 32] {
++        hash_mode(material, &self.0).0
++    }
++
++    /// Derive 32 bytes per independent input without rehashing the context.
++    /// Results are in input order in caller storage.
++    ///
++    /// # Errors
++    /// Rejects a slot count mismatch or a message over [`MAX_BATCH_MESSAGE`].
++    pub fn derive_batch(&self, inputs: &[&[u8]], out: &mut [Hash]) -> Result<(), BatchError> {
++        batch_on(inputs, out, self.0, Backend::selected())
++    }
++}
++
++crate::debug_non_exhaustive!(DeriveKeyContext {});
++
++/// Hash independent messages in input order using the available vector lanes.
++/// Empty batches are valid and use no output slots.
++///
++/// # Errors
++/// Rejects a slot count mismatch or a message over [`MAX_BATCH_MESSAGE`].
++pub fn hash_batch(inputs: &[&[u8]], out: &mut [Hash]) -> Result<(), BatchError> {
++    batch_on(inputs, out, Mode::HASH, Backend::selected())
++}
++
++/// Authenticate independent messages with one BLAKE3 key, retaining input order.
++///
++/// # Errors
++/// Rejects a slot count mismatch or a message over [`MAX_BATCH_MESSAGE`].
++pub fn keyed_hash_batch(
++    key: &[u8; 32],
++    inputs: &[&[u8]],
++    out: &mut [Hash],
++) -> Result<(), BatchError> {
++    batch_on(
++        inputs,
++        out,
++        Mode::keyed(key, KEYED_HASH),
++        Backend::selected(),
++    )
++}
++
++impl Backend {
++    /// Hash a batch on this path. Returns `None` if this target cannot run it.
++    ///
++    /// # Errors
++    /// Rejects the same inputs as [`hash_batch`].
++    pub fn hash_batch(self, inputs: &[&[u8]], out: &mut [Hash]) -> Option<Result<(), BatchError>> {
++        self.is_available()
++            .then(|| batch_on(inputs, out, Mode::HASH, self))
++    }
++
++    /// Authenticate a batch on this path, if it can execute here.
++    ///
++    /// # Errors
++    /// Rejects the same inputs as [`keyed_hash_batch`].
++    pub fn keyed_hash_batch(
++        self,
++        key: &[u8; 32],
++        inputs: &[&[u8]],
++        out: &mut [Hash],
++    ) -> Option<Result<(), BatchError>> {
++        self.is_available()
++            .then(|| batch_on(inputs, out, Mode::keyed(key, KEYED_HASH), self))
++    }
++
++    /// Derive a batch on this path, if it can execute here.
++    ///
++    /// # Errors
++    /// Rejects the same inputs as [`DeriveKeyContext::derive_batch`].
++    pub fn derive_key_batch(
++        self,
++        context: &DeriveKeyContext,
++        inputs: &[&[u8]],
++        out: &mut [Hash],
++    ) -> Option<Result<(), BatchError>> {
++        self.is_available()
++            .then(|| batch_on(inputs, out, context.0, self))
++    }
++}
++
++fn batch_on(
++    inputs: &[&[u8]],
++    out: &mut [Hash],
++    mode: Mode,
++    backend: Backend,
++) -> Result<(), BatchError> {
++    if out.len() != inputs.len() {
++        return Err(BatchError::OutputCount {
++            messages: inputs.len(),
++            slots: out.len(),
++        });
++    }
++    if let Some(index) = inputs
++        .iter()
++        .position(|input| input.len() > MAX_BATCH_MESSAGE)
++    {
++        return Err(BatchError::MessageLength {
++            index,
++            bytes: inputs[index].len(),
++        });
++    }
++    if backend == Backend::Portable {
++        for (&input, slot) in inputs.iter().zip(out) {
++            *slot = hash_on(input, backend, mode);
++        }
++    } else {
++        // Availability is established before taking any of the named paths.
++        crate::arch::blake3_messages_on(backend, inputs, mode, out)
++            .expect("selected or explicitly checked BLAKE3 backend is available");
++    }
++    Ok(())
++}
+diff --git crates/purrdf/Cargo.toml crates/purrdf/Cargo.toml
+index 7e38a4305..c9c6e88de 100644
+--- crates/purrdf/Cargo.toml
++++ crates/purrdf/Cargo.toml
+@@ -118,6 +118,10 @@ harness = false
+ name = "host_import_probe"
+ crate-type = ["cdylib"]
+ 
++[[example]]
++name = "museum_attributions"
++test = true
++
+ [[bench]]
+ name = "multimodal_on_demand_read"
+ harness = false
+diff --git crates/purrdf/examples/museum/attributions.rq crates/purrdf/examples/museum/attributions.rq
+new file mode 100644
+index 000000000..c5b27dd69
+--- /dev/null
++++ crates/purrdf/examples/museum/attributions.rq
+@@ -0,0 +1,16 @@
++# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++PREFIX ex: <https://example.org/museum/>
++PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
++PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
++
++SELECT ?object ?label ?date ?source ?sourceLabel WHERE {
++  ?object a ex:Object ;
++    rdfs:label ?label ;
++    ex:attributedDate ?date .
++  ?attribution rdf:reifies <<( ?object ex:attributedDate ?date )>> ;
++    ex:source ?source .
++  ?source rdfs:label ?sourceLabel .
++}
++ORDER BY ?object ?date ?source
+diff --git crates/purrdf/examples/museum/collection.ttl crates/purrdf/examples/museum/collection.ttl
+new file mode 100644
+index 000000000..f9a5a0aee
+--- /dev/null
++++ crates/purrdf/examples/museum/collection.ttl
+@@ -0,0 +1,28 @@
++# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++# SPDX-License-Identifier: CC-BY-4.0
++# An original, fictional museum collection.
++
++@prefix ex: <https://example.org/museum/> .
++@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
++@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
++
++ex:lotus-bowl a ex:Object ;
++  rdfs:label "莲纹碗"@zh ;
++  ex:attributedDate
++    "1718-05-12"^^xsd:date {| ex:source ex:acquisition-register |} ,
++    "1723-09-08"^^xsd:date {| ex:source ex:conservation-notebook |} .
++
++ex:brush-rest a ex:Object ; rdfs:label "山形笔架"@zh .
++ex:bronze-mirror a ex:Object ; rdfs:label "花纹铜镜"@zh .
++ex:tea-caddy a ex:Object ; rdfs:label "竹纹茶罐"@zh .
++ex:water-dropper a ex:Object ; rdfs:label "蕉叶水滴"@zh .
++ex:inkstone a ex:Object ; rdfs:label "云纹砚"@zh .
++ex:silk-fan a ex:Object ; rdfs:label "团花绢扇"@zh .
++ex:incense-box a ex:Object ; rdfs:label "雕漆香盒"@zh .
++ex:porcelain-cup a ex:Object ; rdfs:label "白瓷杯"@zh .
++ex:wooden-tray a ex:Object ; rdfs:label "木托盘"@zh .
++ex:stone-seal a ex:Object ; rdfs:label "石印"@zh .
++ex:jade-pendant a ex:Object ; rdfs:label "鱼形玉坠"@zh .
++
++ex:acquisition-register rdfs:label "入藏登记簿"@zh .
++ex:conservation-notebook rdfs:label "修复笔记"@zh .
+diff --git crates/purrdf/examples/museum/expected.srj crates/purrdf/examples/museum/expected.srj
+new file mode 100644
+index 000000000..9c5c8d338
+--- /dev/null
++++ crates/purrdf/examples/museum/expected.srj
+@@ -0,0 +1 @@
++{"head":{"vars":["object","label","date","source","sourceLabel"]},"results":{"bindings":[{"object":{"type":"uri","value":"https://example.org/museum/lotus-bowl"},"label":{"type":"literal","value":"莲纹碗","xml:lang":"zh"},"date":{"type":"literal","value":"1718-05-12","datatype":"http://www.w3.org/2001/XMLSchema#date"},"source":{"type":"uri","value":"https://example.org/museum/acquisition-register"},"sourceLabel":{"type":"literal","value":"入藏登记簿","xml:lang":"zh"}},{"object":{"type":"uri","value":"https://example.org/museum/lotus-bowl"},"label":{"type":"literal","value":"莲纹碗","xml:lang":"zh"},"date":{"type":"literal","value":"1723-09-08","datatype":"http://www.w3.org/2001/XMLSchema#date"},"source":{"type":"uri","value":"https://example.org/museum/conservation-notebook"},"sourceLabel":{"type":"literal","value":"修复笔记","xml:lang":"zh"}}]}}
+diff --git crates/purrdf/examples/museum/expected.srj.license crates/purrdf/examples/museum/expected.srj.license
+new file mode 100644
+index 000000000..55b649738
+--- /dev/null
++++ crates/purrdf/examples/museum/expected.srj.license
+@@ -0,0 +1,2 @@
++SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++SPDX-License-Identifier: CC-BY-4.0
+diff --git crates/purrdf/examples/museum_attributions.rs crates/purrdf/examples/museum_attributions.rs
+new file mode 100644
+index 000000000..4ed96c253
+--- /dev/null
++++ crates/purrdf/examples/museum_attributions.rs
+@@ -0,0 +1,49 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Query two competing dates and their sources in a fictional collection.
++
++use purrdf::sparql::{NativeSparqlEngine, from_json};
++use purrdf::{SparqlEngine, SparqlRequest, parse_dataset};
++
++const COLLECTION: &str = include_str!("museum/collection.ttl");
++const QUERY: &str = include_str!("museum/attributions.rq");
++const EXPECTED: &str = include_str!("museum/expected.srj");
++
++fn check_attributions(collection: &str, expected: &str) -> Result<(), Box<dyn std::error::Error>> {
++    let dataset = parse_dataset(collection.as_bytes(), "text/turtle", None)?;
++    let result = NativeSparqlEngine::new().query(
++        &dataset,
++        SparqlRequest {
++            query: QUERY,
++            base_iri: None,
++            substitutions: &[],
++        },
++    )?;
++    let (variables, rows) = result
++        .solutions()
++        .ok_or_else(|| std::io::Error::other("the attribution query must return SELECT rows"))?;
++    let expected = from_json(expected.as_bytes())?;
++    assert_eq!(variables, expected.variables);
++    assert_eq!(rows, expected.rows);
++    Ok(())
++}
++
++fn main() -> Result<(), Box<dyn std::error::Error>> {
++    check_attributions(COLLECTION, EXPECTED)?;
++
++    // The notebook date changes independently of the register's date.
++    let collection = COLLECTION.replacen("1723-09-08", "1724-09-08", 1);
++    let expected = EXPECTED.replacen("1723-09-08", "1724-09-08", 1);
++    assert_ne!(collection, COLLECTION);
++    assert_ne!(expected, EXPECTED);
++    check_attributions(&collection, &expected)
++}
++
++#[cfg(test)]
++mod tests {
++    #[test]
++    fn museum_sources_and_dates_stay_paired() {
++        super::main().expect("both original attributions and the documented edit match the golden");
++    }
++}
+diff --git crates/purrdf/tests/readme_quickstart.rs crates/purrdf/tests/readme_quickstart.rs
+index 9f22ab67a..51a5ef01a 100644
+--- crates/purrdf/tests/readme_quickstart.rs
++++ crates/purrdf/tests/readme_quickstart.rs
+@@ -1,8 +1,8 @@
+ // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+-//! Keeps the root `README.md` Rust quickstart honest: this test is the same
+-//! code, verbatim. If it stops compiling or passing, fix the README too.
++//! Exercises the book's dataset builder round trip and the document-base
++//! contract. The separate published quickstart check runs the README programs.
+ 
+ use purrdf::{
+     NativeRdfFormat, RdfDatasetBuilder, RdfLiteral, SerializeGraph, parse_dataset,
+diff --git docs/BENCHMARKS.md docs/BENCHMARKS.md
+index a2dff2215..545cbc116 100644
+--- docs/BENCHMARKS.md
++++ docs/BENCHMARKS.md
+@@ -1197,6 +1197,87 @@ is larger at the target scales and regresses every measured query shape. The
+ measured production decision is therefore to retain both FoQ posting indexes;
+ pack bytes and decoding behavior remain unchanged.
+ 
++## Independent BLAKE3 messages
++
++On Linux with a native instruction counter, run the fixed-work comparison
++with a new receipts directory.
++
++```bash
++cargo bench --locked -p purrdf-hash-conformance --bench digests -- \
++  --blake3-instructions .stage/blake3-instructions
++```
++
++Each row processes 16,384 deterministic messages and records three
++unscaled `instructions:u` samples. The single and prepared derive-key
++rows use the same input mutation, output width, and witness loop. Context
++preparation is outside the counter. The grouped control and the batch
++use the same sixteen inputs and output slots. The control hashes each
++message individually and the batch calls the independent-message API.
++The report retains every available named backend, the default dispatcher,
++and the raw counter and witness receipts. It does not measure elapsed time.
++
++With the x86-64 ABI on an AMD Ryzen AI Max+ 395 and
++`rustc 1.102.0-nightly (5df8c02af)`, the default dispatcher gives the
++following median userspace retired instructions per message. Both builds
++use the same processor, compiler, release optimization, fixed work count,
++and matching digest witnesses. The grouped control shows the cost of hashing
++the same batch inputs individually on the current build.
++
++| Bytes | Prior single | Single | Prepared derive-key | Grouped singles | Batch |
++| ---: | ---: | ---: | ---: | ---: | ---: |
++| 16 | 993.03 | 395.03 | 395.03 | 392.63 | 237.88 |
++| 32 | 991.03 | 393.03 | 393.03 | 390.63 | 235.88 |
++| 63 | 991.03 | 393.03 | 393.03 | 390.63 | 235.88 |
++| 64 | 991.03 | 393.03 | 393.03 | 390.63 | 235.88 |
++| 65 | 2,015.03 | 844.03 | 844.03 | 841.63 | 295.88 |
++| 100 | 2,008.03 | 837.03 | 837.03 | 834.63 | 295.88 |
++| 128 | 2,008.03 | 837.03 | 837.03 | 834.63 | 295.88 |
++| 256 | 3,884.03 | 1,519.03 | 1,519.03 | 1,516.63 | 425.88 |
++| 512 | 7,636.03 | 2,883.03 | 2,883.03 | 2,880.63 | 673.88 |
++| 1024 | 15,140.03 | 5,611.03 | 5,611.03 | 5,608.63 | 1,200.88 |
++| 1025 | 17,032.03 | 16,459.03 | 16,459.05 | 16,456.63 | 1,428.07 |
++| 2048 | 16,767.03 | 16,194.04 | 16,194.04 | 16,191.72 | 2,385.78 |
++| 2049 | 17,814.03 | 17,241.05 | 17,241.08 | 17,238.73 | 2,613.78 |
++| 3072 | 17,549.03 | 16,976.07 | 16,976.04 | 16,973.75 | 3,571.79 |
++| 3073 | 17,007.05 | 16,434.04 | 16,434.04 | 16,431.53 | 3,795.59 |
++| 4096 | 6,837.03 | 6,264.03 | 6,264.03 | 6,261.72 | 4,753.59 |
++
++Among the forced paths, AVX2 had the lowest single-message count for the
++sampled lengths through 1024 bytes. AVX-512 had the lowest count from 1025
++through 4096 bytes on this host. It also had the lowest sampled batch counts.
++The default single call and a forced call have different feature checks, so
++their total instruction counts need not match even for the same kernel. The
++default plain and reused derive-key medians differ by less than 0.03
++instruction per message at every measured length. For example, the default
++32-byte single hash and reused derivation both retired about 393 instructions
++per message.
++
++To measure the 32-bit ABI on the same hardware, add
++`--target i686-unknown-linux-gnu` before the bench arguments. For one chunk,
++the dispatcher uses the detected SSE2 compressor when available. For two
++chunks, it compresses each leaf with SSE2 and combines the two chaining
++values. This avoids doing four lanes of leaf work for two chunks. The
++portable compressor remains the fallback when SSE2 is unavailable.
++
++The same host and compiler gave these medians for the 32-bit binary, in
++userspace retired instructions per message. The prior column uses portable
++compression for one chunk and four padded lanes for two.
++
++| Bytes | Prior default | Current default | Current forced portable |
++| ---: | ---: | ---: | ---: |
++| 32 | 1,387.05 | 799.05 | 1,396.09 |
++| 1024 | 21,444.08 | 11,643.06 | 21,455.07 |
++| 1025 | 33,310.10 | 12,148.06 | 24,271.06 |
++| 2048 | 33,015.09 | 22,356.07 | 44,243.07 |
++
++The detected path retired fewer instructions than both alternatives at the
++first byte of the second chunk and at each sampled block boundary through
++two chunks. Across the full size matrix, prepared derivation did not add
++more than 0.031 instruction per message in any measured row. These
++measurements do not establish instruction counts for other
++microarchitectures, `AArch64`, or Wasm. The named SIMD128 execution checks
++digest parity, not hardware instruction counts.
++
+ ## Python compat harness (`bench_compat.py`)
+ 
+ `bindings/python/benchmarks/bench_compat.py` times the shim and the genuine
+diff --git docs/RELEASE.md docs/RELEASE.md
+index ba9e9abc4..fbff7da62 100644
+--- docs/RELEASE.md
++++ docs/RELEASE.md
+@@ -23,6 +23,13 @@ The release lane follows the `gmeow-gts` cargo release pattern:
+ - crates.io publication uses Trusted Publishing through GitHub Actions OIDC,
+   not a long-lived repository secret.
+ 
++After the Cargo publisher succeeds, a read-only quickstart job checks the
++facade crate's registry checksum and build provenance, then runs the Rust
++programs from both tagged READMEs against that exact published version on
++stable Rust. The run artifact retains the sources, lockfile and both results.
++To check an older immutable release without publishing again, run
++**Check the published Rust quickstart** from `main` with its `rust-v` tag.
++
+ ## Cutting a release
+ 
+ The suite ships **one** version to crates.io, PyPI, and npm. Cutting a release
+@@ -414,6 +421,13 @@ The backfill installs the already published shadow wheel in every platform
+ lane after verifying its pinned digest. Rehearsals have a separate concurrency
+ group from publication.
+ 
++For an already qualified 5.0.1 backfill, enable `recover` to use the retained
++artifacts instead of rebuilding. With `publish` off, the workflow verifies the
++original aggregate and checks both live PyPI inventories without publishing
++credentials. With both inputs enabled, it publishes only missing native wheels
++after the same checks and leaves the shadow files unchanged. An unavailable
++artifact or a mismatched digest stops recovery without a rebuild.
++
+ Configure a matching publisher separately for **each** PyPI project; use a
+ pending publisher if the project does not yet exist. The main project’s publisher
+ does not authorize publication of the shadow project. Configure each as:
+diff --git docs/WASM_TESTING.md docs/WASM_TESTING.md
+index 8da43dfea..ca6c6b91b 100644
+--- docs/WASM_TESTING.md
++++ docs/WASM_TESTING.md
+@@ -278,7 +278,7 @@ exactly once; missing, ignored, duplicate or skipped selections fail.
+ | `purrdf` / `knn_wasm_reassociated` | SIMD | `the_reassociated_path_is_the_one_this_build_was_made_for`, `the_reassociated_distance_is_within_the_error_bound_of_the_exact_one` | Actual WASM dispatch and SIMD kernel |
+ | `purrdf-hnsw` / `wasm_reassociated` | SIMD | `an_image_recorded_on_another_wasm_path_is_refused_by_name`, `the_image_records_the_path_and_shape_this_build_was_made_for` | Actual WASM arithmetic backend identity |
+ | `purrdf-hash-conformance` / `hex` | SIMD | `every_path_matches_portable` | Actual WASM SIMD hex kernel |
+-| `purrdf-hash-conformance` / `blake3` | SIMD | `required_backends_are_available`, `official_modes_and_extended_output`, `xof_large_output_and_seek_boundaries`, `derived_context_trees_match_across_backends`, `random_inputs_cover_irregular_trees_and_alignment` | Actual WASM SIMD BLAKE3 kernels |
++| `purrdf-hash-conformance` / `blake3` | SIMD | `required_backends_are_available`, `official_modes_and_extended_output`, `xof_large_output_and_seek_boundaries`, `derived_context_trees_match_across_backends`, `mixed_message_batch_simd_dispatch`, `random_inputs_cover_irregular_trees_and_alignment` | Actual WASM SIMD BLAKE3 kernels, including independent mixed-message batching |
+ | `purrdf-core` / `csv_scan_wasm` | SIMD | `every_kernel_agrees_with_the_per_byte_scan_at_every_alignment_and_length`, `every_kernel_agrees_with_the_per_byte_scan_over_seeded_inputs`, `the_target_explicit_kernel_is_among_those_compared` | Actual WASM SIMD CSV kernel |
+ | `purrdf-deflate` / `deflate_conformance` | SIMD | `selected_backend_is_reported`, `every_kernel_path_encodes_and_decodes_the_same_bytes`, `copy_kernels_match_portable`, `match_length_kernels_match_portable`, `hash_kernels_match_portable` | Actual WASM SIMD DEFLATE kernels |
+ 
+diff --git docs/book/po/zh-Hans.po docs/book/po/zh-Hans.po
+index 4c5555df1..415b8de53 100644
+--- docs/book/po/zh-Hans.po
++++ docs/book/po/zh-Hans.po
+@@ -733,6 +733,15 @@ msgstr ""
+ "`purrdf::iri`、`purrdf::xsd`、`purrdf::events`）——使用方合理导入的任何内容都"
+ "只凭 `purrdf` 即可到达，绝不需要深入某个子 crate。"
+ 
++#: src/getting-started/rust.md:21
++msgid ""
++"This example uses the published [PurRDF 5.0.1](https://crates.io/crates/purrdf/5.0.1). "
++"The install command may select a newer release. Cargo records the selected "
++"version in `Cargo.lock`."
++msgstr ""
++"本示例使用已发布的 [PurRDF 5.0.1](https://crates.io/crates/purrdf/5.0.1)。"
++"安装命令可能选用更新的版本。Cargo 将选用的版本记录在 `Cargo.lock` 中。"
++
+ #: src/getting-started/rust.md:21
+ msgid ""
+ "The MSRV is Rust **1.98** on the stable channel: by policy the code uses "
+@@ -908,6 +917,14 @@ msgstr ""
+ "每个发布的 crate 都能干净地构建到 `wasm32-unknown-unknown`，因此同样的 Rust "
+ "代码路径在原生宿主与 wasm 宿主中都能工作。"
+ 
++#: src/getting-started/rust.md:104
++msgid "Track development"
++msgstr "跟踪开发"
++
++#: src/getting-started/rust.md:106
++msgid "To build against current repository source, add the Git dependency."
++msgstr "如需使用仓库当前源码构建，请添加 Git 依赖。"
++
+ #: src/getting-started/rust.md:102 src/getting-started/python.md:158
+ msgid "Next steps"
+ msgstr "后续步骤"
+diff --git docs/book/src/concepts/rdf12.md docs/book/src/concepts/rdf12.md
+index 11e2e01cf..63c5936c5 100644
+--- docs/book/src/concepts/rdf12.md
++++ docs/book/src/concepts/rdf12.md
+@@ -41,6 +41,39 @@ count handed to the loss ledger (see
+ reified statements — the SHACL 1.2 `sh:reifierShape` /
+ `sh:reificationRequired` surface — is covered in [SHACL](../validation/shacl.md).
+ 
++### Worked example: competing museum attributions
++
++An original, fictional [museum collection](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/purrdf/examples/museum/collection.ttl)
++contains twelve objects with Chinese labels. Two records give different dates
++for the same lotus-pattern bowl (莲纹碗). Turtle's annotation block on each
++date creates a reifier carrying that date's source. The
++[SPARQL query](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/purrdf/examples/museum/attributions.rq)
++joins each date to its reifier via `rdf:reifies` and keeps the claims separate.
++Neither date overrides the other.
++
++| Object | Attributed date | Source |
++| --- | --- | --- |
++| 莲纹碗 | `1718-05-12` | 入藏登记簿 (acquisition register) |
++| 莲纹碗 | `1723-09-08` | 修复笔记 (conservation notebook) |
++
++In the [playground](https://blackcat-informatics.github.io/purrdf/playground/),
++open **Gallery**, then select **Load & run** for **Museum collection (Chinese
++labels)**. **Copy permalink** on the gallery entry creates a link that
++restores the original Turtle and query. Open that link to see the two rows
++automatically. Links with edited or different input or queries wait for
++**Run**. In the Input pane, replace `1723-09-08` with
++`1724-09-08`, parse the updated Turtle, and rerun the query. Only the
++conservation notebook's row changes.
++
++From the repository, the Rust example checks the same typed rows for both
++versions of the input:
++
++```sh
++cargo run --locked -p purrdf --example museum_attributions
++```
++
++The fictional collection is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
++
+ ## Base-direction literals
+ 
+ RDF 1.2 adds `rdf:dirLangString`: a language-tagged literal that also carries
+diff --git docs/book/src/getting-started/rust.md docs/book/src/getting-started/rust.md
+index ff75e68cd..7f4ccd37e 100644
+--- docs/book/src/getting-started/rust.md
++++ docs/book/src/getting-started/rust.md
+@@ -18,6 +18,10 @@ a sub-crate.
+ cargo add purrdf
+ ```
+ 
++This example uses the published [PurRDF 5.0.1](https://crates.io/crates/purrdf/5.0.1).
++The install command may select a newer release. Cargo records the selected
++version in `Cargo.lock`.
++
+ The MSRV is Rust **1.98** on the stable channel: by policy the code uses zero
+ nightly (unstable) features, so stable 1.98 builds it. The repository's own
+ toolchain floats on nightly for its sharper lints; see
+@@ -99,6 +103,14 @@ map is in the
+ Every release crate builds cleanly for `wasm32-unknown-unknown`, so the same
+ Rust code paths work in native and wasm hosts.
+ 
++## Track development
++
++To build against current repository source, add the Git dependency.
++
++```sh
++cargo add purrdf --git https://github.com/Blackcat-Informatics/purrdf.git
++```
++
+ ## Next steps
+ 
+ - [The Interned Dataset IR](../concepts/interned-dataset.md) — how the IR works
+diff --git docs/design/purrdf-simd.md docs/design/purrdf-simd.md
+index dc7cd2965..93cb8be5f 100644
+--- docs/design/purrdf-simd.md
++++ docs/design/purrdf-simd.md
+@@ -220,15 +220,28 @@ can lose overall through buffer initialization, copies, dispatch or tree work.
+ 
+ **Scalar can win inside a block.** BLAKE3's four independent scalar quarter
+ rounds give an out-of-order x86 processor multiple dependency chains to schedule.
+-Putting those four rounds in a vector creates one instruction chain. Measurements
+-on the Ryzen AI Max+ 395 favored scalar ARX through one 1 KiB chunk, even with
+-AVX-512 available. Default x86 one-shot hashes and short stream finalizations use
+-that path; explicit backend forcing retains each SIMD single-block kernel for
+-tests and comparison. Independent *chunks* still benefit from SIMD. Match batch width to the live
++Putting those four rounds in a vector creates one instruction chain. Earlier
++latency measurements on the Ryzen AI Max+ 395 favored scalar ARX through a 1 KiB
++chunk, even with AVX-512 available. Short x86 stream finalizations retain that
++path. The one-shot path uses a separate retired-instruction comparison, with
++explicit backend forcing retained for tests and comparison. Independent chunks
++still benefit from SIMD. Match batch width to the live
+ input too: the AVX-512VL four-chunk path avoids a padded 16 KiB batch for
+ messages through 4 KiB, while full batches keep sixteen lanes. This is a
+ workload decision, not a claim that scalar always wins on other processors.
+ 
++**Put independent messages in lanes.** BLAKE3 uses the same word-parallel
++rounds for independent messages as for chunks of one message. The batch APIs
++accept up to 4096 bytes per message and publish results in input order into
++caller storage. Each lane owns its length, chunk counter, and root designation.
++Completed lanes retain their last chaining value while longer neighbors
++continue. The parent stage also runs in the vector lanes. SSE2, NEON and
++SIMD128 process four messages per group, AVX2 processes eight, and AVX-512
++processes sixteen. The portable backend hashes each message independently.
++The `digests` benchmark's `--blake3-instructions` selection compares single
++calls, individual calls on a prearranged group, and actual SIMD batching.
++It also measures reuse of a prepared derive-key context.
++
+ **Specialization must survive code generation.** SHA-3's rho/pi indices and
+ rotation counts are mathematical constants. A compact indexed loop left variable
+ rotations in baseline x86 code. Expanding the lane expressions exposes immediate
+diff --git docs/playground/app.mjs docs/playground/app.mjs
+index 4d085a1b0..bbc5a3059 100644
+--- docs/playground/app.mjs
++++ docs/playground/app.mjs
+@@ -5,8 +5,15 @@
+ // the aria-live error banner. The main thread NEVER touches the wasm engine —
+ // it is a pure view/message client over the worker.
+ 
+-import { VIGNETTES, findVignette, DEFAULT_STATE } from "./examples/gallery.mjs";
+-import { assertSarifVersion, describeSarif } from "./sarif.mjs";
++import {
++  VIGNETTES, findVignette, DEFAULT_STATE, matchesBundledMuseumQuery, vignetteState,
++} from "./examples/gallery.mjs";
++import {
++  InterfaceError, interfaceFailure, localize, roundTripNote, sarifWarningLabels,
++  selectedLocale, setLocale, withLocale,
++} from "./locale.mjs";
++import { decodeState, encodeState } from "./permalink.mjs";
++import { EXPECTED_SARIF_VERSION, assertSarifVersion, describeSarif } from "./sarif.mjs";
+ 
+ const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
+ 
+@@ -31,7 +38,7 @@ worker.addEventListener("message", (event) => {
+ });
+ 
+ worker.addEventListener("error", (event) => {
+-  showError(`worker crashed: ${event.message ?? event}`);
++  showError(interfaceFailure("worker crashed", "工作线程异常终止", event));
+ });
+ 
+ /** Send an op to the worker; resolves with its result or rejects on engine error. */
+@@ -49,9 +56,15 @@ function call(op, args) {
+ 
+ const $ = (id) => document.getElementById(id);
+ 
+-function showError(message) {
++function showError(error) {
+   const banner = $("error-banner");
+-  banner.textContent = message;
++  const message = String(error?.message ?? error);
++  const detail = el("span", { id: "error-message", text: message });
++  if (error instanceof InterfaceError) localize(detail, message, error.chinese);
++  banner.replaceChildren(detail);
++  if (typeof error?.code === "string") {
++    banner.append(" ", el("code", { id: "error-code", text: error.code }));
++  }
+   banner.hidden = false;
+ }
+ 
+@@ -61,9 +74,9 @@ function clearError() {
+   banner.hidden = true;
+ }
+ 
+-function showStatus(message) {
++function showStatus(message, chinese = message) {
+   const banner = $("status-banner");
+-  banner.textContent = message;
++  localize(banner, message, chinese);
+   banner.hidden = false;
+ }
+ 
+@@ -71,9 +84,9 @@ function showStatus(message) {
+ async function guard(fn) {
+   clearError();
+   try {
+-    await fn();
++    return await fn();
+   } catch (e) {
+-    showError(String(e?.message ?? e));
++    showError(e);
+   }
+ }
+ 
+@@ -82,6 +95,8 @@ function el(tag, props = {}, children = []) {
+   for (const [k, v] of Object.entries(props)) {
+     if (k === "class") node.className = v;
+     else if (k === "text") node.textContent = v;
++    else if (k === "localeText") localize(node, ...v);
++    else if (k === "localeTitle") localize(node, ...v, "title");
+     else if (k === "html") node.innerHTML = v;
+     else if (k.startsWith("data-")) node.setAttribute(k, v);
+     else if (k === "hidden") node.hidden = v;
+@@ -158,15 +173,26 @@ function srjTermToDescriptor(b) {
+ 
+ async function copyText(text) {
+   if (navigator.clipboard?.writeText) {
+-    await navigator.clipboard.writeText(text);
++    try {
++      await navigator.clipboard.writeText(text);
++    } catch (error) {
++      throw interfaceFailure("could not copy to clipboard", "无法复制到剪贴板", error);
++    }
+     return;
+   }
+   // Capability fallback — a hidden textarea + execCommand (documented, not a swallow).
+   const ta = el("textarea", { value: text, style: "position:fixed;opacity:0" });
+   document.body.append(ta);
+-  ta.select();
+-  document.execCommand("copy");
+-  ta.remove();
++  try {
++    ta.select();
++    if (!document.execCommand("copy")) {
++      throw new InterfaceError("the browser refused the copy command", "浏览器拒绝执行复制命令");
++    }
++  } catch (error) {
++    throw interfaceFailure("could not copy to clipboard", "无法复制到剪贴板", error);
++  } finally {
++    ta.remove();
++  }
+ }
+ 
+ function downloadText(filename, text, mime = "text/plain") {
+@@ -214,77 +240,14 @@ function applyState(state) {
+   if (s.activePane) selectPane(s.activePane);
+ }
+ 
+-const b64urlEncode = (bytes) => {
+-  let bin = "";
+-  for (const byte of bytes) bin += String.fromCharCode(byte);
+-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+-};
+-
+-const b64urlDecode = (s) => {
+-  const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
+-  const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
+-  const bytes = new Uint8Array(bin.length);
+-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+-  return bytes;
+-};
+-
+-async function streamThrough(stream, bytes) {
+-  const writer = stream.writable.getWriter();
+-  writer.write(bytes);
+-  writer.close();
+-  const chunks = [];
+-  const reader = stream.readable.getReader();
+-  for (;;) {
+-    const { done, value } = await reader.read();
+-    if (done) break;
+-    chunks.push(value);
+-  }
+-  let len = 0;
+-  for (const c of chunks) len += c.length;
+-  const out = new Uint8Array(len);
+-  let off = 0;
+-  for (const c of chunks) {
+-    out.set(c, off);
+-    off += c.length;
+-  }
+-  return out;
+-}
+-
+-/** Encode state → (gzip when available) → base64url. All client-side, no network. */
+-async function encodeState(state) {
+-  const json = new TextEncoder().encode(JSON.stringify(state));
+-  if (typeof CompressionStream === "function") {
+-    const gz = await streamThrough(new CompressionStream("gzip"), json);
+-    return `g${b64urlEncode(gz)}`;
+-  }
+-  // Documented capability fallback: plain base64url of the JSON.
+-  return `j${b64urlEncode(json)}`;
+-}
+-
+-async function decodeState(fragment) {
+-  if (!fragment) return null;
+-  const tag = fragment[0];
+-  const body = fragment.slice(1);
+-  const bytes = b64urlDecode(body);
+-  let jsonBytes = bytes;
+-  if (tag === "g") {
+-    if (typeof DecompressionStream !== "function") {
+-      throw new Error("this permalink is gzip-encoded but DecompressionStream is unavailable");
+-    }
+-    jsonBytes = await streamThrough(new DecompressionStream("gzip"), bytes);
+-  } else if (tag !== "j") {
+-    throw new Error("unrecognized permalink encoding");
+-  }
+-  return JSON.parse(new TextDecoder().decode(jsonBytes));
+-}
+-
+-async function copyPermalink(state) {
++async function copyPermalink(getState) {
+   await guard(async () => {
+-    const fragment = await encodeState(state);
++    const locale = selectedLocale();
++    const fragment = await encodeState(withLocale(await getState(), locale));
+     const url = `${location.origin}${location.pathname}#${fragment}`;
+     location.hash = fragment;
+     await copyText(url);
+-    showStatus("Permalink copied to clipboard.");
++    showStatus("Permalink copied to clipboard.", "已将永久链接复制到剪贴板。");
+   });
+ }
+ 
+@@ -320,14 +283,18 @@ function selectPane(pane) {
+ // Pane: Input
+ // ---------------------------------------------------------------------------
+ 
++let latestParse;
++
+ async function doParse() {
+-  await guard(async () => {
+-    const text = $("input-text").value;
+-    const format = $("input-format").value;
+-    const res = await call("parse", { text, format });
+-    $("input-summary").textContent = `Parsed ${res.size} quad(s) as ${format}.`;
++  const request = { text: $("input-text").value, format: $("input-format").value };
++  latestParse = request;
++  return guard(async () => {
++    const res = await call("parse", request);
++    localize($("input-summary"), `Parsed ${res.size} quad(s) as ${request.format}.`,
++      `已按 ${request.format} 格式解析出 ${res.size} 个四元组。`);
+     renderQuadTable(res.rows, res.size, null);
+-    showStatus(`Graph updated: ${res.size} quad(s).`);
++    showStatus(`Graph updated: ${res.size} quad(s).`, `图已更新，共 ${res.size} 个四元组。`);
++    return request;
+   });
+ }
+ 
+@@ -376,39 +343,37 @@ async function doSerializeAll() {
+       const pre = el("pre", {
+         id: `ser-${f}`,
+         class: failed ? "code-out ser-error" : "code-out",
+-        text: failed
+-          ? `⚠ cannot serialize this graph to ${f}:\n${entry.error}`
+-          : entry.text,
++        text: failed ? entry.error : entry.text,
+         "data-format": f,
+         "data-failed": String(failed),
+       });
+       let badge;
+       if (failed) {
+-        badge = el("span", { class: "badge badge-warn", text: "unsupported" });
++        badge = el("span", { class: "badge badge-warn", localeText: ["unsupported", "不支持"] });
+       } else if (entry.roundtripError) {
+-        badge = el("span", { class: "badge badge-warn", text: "comparison refused", title: entry.roundtripError.error });
++        badge = el("span", { class: "badge badge-warn", localeText: ["comparison refused", "无法比较"], title: entry.roundtripError.error });
+       } else if (entry.roundtrips) {
+-        badge = el("span", { class: "badge badge-ok", text: "round-trips" });
++        badge = el("span", { class: "badge badge-ok", localeText: ["round-trips", "可无损往返"] });
+       } else {
+-        badge = el("span", { class: "badge badge-warn", text: "degrades" });
++        badge = el("span", { class: "badge badge-warn", localeText: ["degrades", "往返有损"] });
+       }
+       const copyBtn = el("button", {
+         type: "button",
+         class: "btn-mini",
+-        text: "Copy",
++        localeText: ["Copy", "复制"],
+         "data-copy": f,
+         disabled: failed,
+       });
+       copyBtn.addEventListener("click", () =>
+         guard(async () => {
+           await copyText(entry.text);
+-          showStatus(`Copied ${f}.`);
++          showStatus(`Copied ${f}.`, `已复制 ${f}。`);
+         }),
+       );
+       const dlBtn = el("button", {
+         type: "button",
+         class: "btn-mini",
+-        text: "Download",
++        localeText: ["Download", "下载"],
+         "data-download": f,
+         disabled: failed,
+       });
+@@ -422,13 +387,25 @@ async function doSerializeAll() {
+         copyBtn,
+         dlBtn,
+       ]);
+-      grid.append(el("div", { class: "ser-card" }, [header, pre]));
++      const code = failed ? entry.errorCode : entry.roundtripError?.code;
++      const diagnosticCode = typeof code === "string"
++        ? el("code", { class: "mono", text: code })
++        : null;
++      const refusal = failed
++        ? el("p", { class: "muted", localeText: [
++          `⚠ cannot serialize this graph to ${f}:`, `⚠ 无法将此图序列化为 ${f}：`,
++        ] })
++        : null;
++      const comparison = entry.roundtripError
++        ? el("pre", { class: "code-out ser-error", text: entry.roundtripError.error })
++        : null;
++      grid.append(el("div", { class: "ser-card" }, [header, refusal, pre, comparison, diagnosticCode]));
+     }
+     // Canonical form (the canonical line sequence) — the graph's deterministic identity.
+     const canonCard = el("div", { class: "ser-card" }, [
+       el("div", { class: "ser-head" }, [
+-        el("h4", { text: "canonical (line-sequence N-Quads)", class: "ser-title" }),
+-        el("span", { class: "badge badge-ok", text: "identity" }),
++        el("h4", { localeText: ["canonical (line-sequence N-Quads)", "规范形式（逐行 N-Quads）"], class: "ser-title" }),
++        el("span", { class: "badge badge-ok", localeText: ["identity", "标识"] }),
+       ]),
+       el("pre", { id: "ser-canonical", class: "code-out", text: res.canonical }),
+     ]);
+@@ -442,31 +419,21 @@ async function doSerializeAll() {
+       const degraders = SER_ORDER.filter(
+         (f) => res.formats[f].text != null && !res.formats[f].roundtrips,
+       );
+-      note.textContent =
+-        "This graph carries a quoted triple in object position. " +
+-        (failedFormats.length
+-          ? `These formats cannot even encode it (hard-fail): ${failedFormats.join(", ")}. `
+-          : "") +
+-        (degraders.length
+-          ? `These text formats round-trip lossily: ${degraders.join(", ")}. `
+-          : "") +
+-        `N-Quads and the canonical line-sequence form are the reliable identity reference; ` +
+-        `round-tripping formats here: ${survivors.join(", ")}.`;
+-      note.hidden = false;
++      localize(note, ...roundTripNote(true, failedFormats, degraders, survivors));
+     } else {
+-      note.textContent =
+-        "No object-position quoted triple in this graph. N-Quads and the canonical " +
+-        "line-sequence form remain the deterministic identity reference." +
+-        (failedFormats.length ? ` Formats that hard-failed: ${failedFormats.join(", ")}.` : "");
+-      note.hidden = false;
++      localize(note, ...roundTripNote(false, failedFormats));
+     }
++    note.hidden = false;
+     if (failedFormats.length) {
+       // HARD FAIL surfaced in the aria-live banner — never swallowed.
+       showError(
+-        `Some serializers cannot encode this graph: ${failedFormats.join(", ")}. See each format card for the engine error.`,
++        new InterfaceError(
++          `Some serializers cannot encode this graph: ${failedFormats.join(", ")}. See each format card for the engine error.`,
++          `部分序列化格式无法编码此图：${failedFormats.join(", ")}。各格式卡片显示引擎错误。`,
++        ),
+       );
+     } else {
+-      showStatus("Serialized to all formats.");
++      showStatus("Serialized to all formats.", "已序列化为所有格式。");
+     }
+   });
+ }
+@@ -475,7 +442,10 @@ async function doSerializeAll() {
+ // Pane: SPARQL
+ // ---------------------------------------------------------------------------
+ 
++let queryStarted = false;
++
+ async function doQuery() {
++  queryStarted = true;
+   await guard(async () => {
+     const sparql = $("sparql-text").value;
+     const res = await call("query", { sparql });
+@@ -488,7 +458,7 @@ async function doQuery() {
+         el("pre", { id: "sparql-turtle", class: "code-out", text: res.turtle }),
+       );
+     }
+-    showStatus("Query complete.");
++    showStatus("Query complete.", "查询完成。");
+   });
+ }
+ 
+@@ -529,7 +499,7 @@ function renderSrj(srj, container) {
+   }
+   table.append(thead, tbody);
+   container.append(
+-    el("p", { class: "muted", text: `${rows.length} row(s).` }),
++    el("p", { class: "muted", localeText: [`${rows.length} row(s).`, `共 ${rows.length} 行。`] }),
+     table,
+   );
+ }
+@@ -548,7 +518,7 @@ async function doValidate() {
+     renderSarif(res.sarif);
+     $("btn-download-sarif").disabled = false;
+     const count = res.sarif.runs?.[0]?.results?.length ?? 0;
+-    showStatus(`SHACL validation produced ${count} result(s).`);
++    showStatus(`SHACL validation produced ${count} result(s).`, `SHACL 验证得到 ${count} 条结果。`);
+   });
+ }
+ 
+@@ -560,20 +530,21 @@ function renderSarif(sarif) {
+   // error banner + an inline warning row), never silently echoed.
+   const versionWarning = assertSarifVersion(sarif.version);
+   if (versionWarning) {
+-    showError(versionWarning);
++    const labels = sarifWarningLabels(versionWarning, sarif.version, EXPECTED_SARIF_VERSION);
++    showError(new InterfaceError(...labels));
+     container.append(
+-      el("p", { id: "sarif-version-warning", class: "ask-result", text: versionWarning }),
++      el("p", { id: "sarif-version-warning", class: "ask-result", localeText: labels }),
+     );
+   }
+   container.append(
+     el("p", {
+       class: "muted",
+-      text: describeSarif(sarif),
++      localeText: [describeSarif(sarif), `SARIF ${sarif?.version ?? "（无）"} · 共 ${results.length} 条结果。`],
+     }),
+   );
+   if (results.length === 0) {
+     container.append(
+-      el("p", { id: "sarif-conforms", class: "ask-result", text: "Conforms: no violations." }),
++      el("p", { id: "sarif-conforms", class: "ask-result", localeText: ["Conforms: no violations.", "符合形状，无违规。"] }),
+     );
+     return;
+   }
+@@ -581,9 +552,9 @@ function renderSarif(sarif) {
+   table.append(
+     el("thead", {}, [
+       el("tr", {}, [
+-        el("th", { scope: "col", text: "level" }),
+-        el("th", { scope: "col", text: "ruleId" }),
+-        el("th", { scope: "col", text: "message" }),
++        el("th", { scope: "col", localeText: ["level", "级别"] }),
++        el("th", { scope: "col", localeText: ["ruleId", "规则标识"] }),
++        el("th", { scope: "col", localeText: ["message", "消息"] }),
+       ]),
+     ]),
+   );
+@@ -615,6 +586,9 @@ async function doEntail() {
+       res.diagnostics.length === 0
+         ? "Materialized SHACL-AF entailments."
+         : `Materialized SHACL-AF entailments; shapes graph diagnostics: ${res.diagnostics.join("; ")}.`,
++      res.diagnostics.length === 0
++        ? "已物化 SHACL-AF 蕴涵。"
++        : `已物化 SHACL-AF 蕴涵。形状图诊断：${res.diagnostics.join("; ")}`,
+     );
+   });
+ }
+@@ -632,12 +606,14 @@ async function doCompare() {
+       bFormat: $("graph-b-format").value,
+       canonicalSearch: $("canonical-search").value,
+     });
+-    $("identity-result").textContent = `isomorphic: ${res.isomorphic ? "yes" : "no"}`;
++    localize($("identity-result"), `isomorphic: ${res.isomorphic ? "yes" : "no"}`,
++      res.isomorphic ? "同构" : "不同构");
+     $("identity-result").className = `identity-verdict ${res.isomorphic ? "verdict-yes" : "verdict-no"}`;
+     $("canon-a").textContent = res.canonicalA;
+     $("canon-b").textContent = res.canonicalB;
+     renderDiff(res.canonicalA, res.canonicalB);
+-    showStatus(`Compared graphs — isomorphic: ${res.isomorphic ? "yes" : "no"}.`);
++    showStatus(`Compared graphs — isomorphic: ${res.isomorphic ? "yes" : "no"}.`,
++      res.isomorphic ? "图比较完成：同构。" : "图比较完成：不同构。");
+   });
+ }
+ 
+@@ -651,7 +627,7 @@ function renderDiff(a, b) {
+   const onlyB = b.split("\n").filter((l) => l && !setA.has(l));
+   if (onlyA.length === 0 && onlyB.length === 0) {
+     container.append(
+-      el("p", { class: "ask-result", text: "Canonical forms are byte-identical." }),
++      el("p", { class: "ask-result", localeText: ["Canonical forms are byte-identical.", "规范形式逐字节相同。"] }),
+     );
+     return;
+   }
+@@ -667,22 +643,29 @@ function renderDiff(a, b) {
+ // Pane: Quad table (with click-to-filter via match())
+ // ---------------------------------------------------------------------------
+ 
++const TERM_POSITIONS_ZH = { subject: "主语", predicate: "谓语", object: "宾语", graph: "图" };
++
+ function renderQuadTable(rows, size, filterInfo) {
+   const container = $("quad-table");
+   container.replaceChildren();
+-  $("filter-info").textContent = filterInfo
+-    ? `Filtered on ${filterInfo} — ${size} quad(s). `
+-    : `${size} quad(s).`;
++  localize($("filter-info"),
++    filterInfo
++      ? `Filtered on ${filterInfo.position} = ${filterInfo.label} — ${size} quad(s). `
++      : `${size} quad(s).`,
++    filterInfo
++      ? `筛选条件：${TERM_POSITIONS_ZH[filterInfo.position]} = ${filterInfo.label}，共 ${size} 个四元组。`
++      : `共 ${size} 个四元组。`,
++  );
+   $("btn-clear-filter").hidden = !filterInfo;
+ 
+   const table = el("table", { class: "data-table" });
+   table.append(
+     el("thead", {}, [
+       el("tr", {}, [
+-        el("th", { scope: "col", text: "subject" }),
+-        el("th", { scope: "col", text: "predicate" }),
+-        el("th", { scope: "col", text: "object" }),
+-        el("th", { scope: "col", text: "graph" }),
++        el("th", { scope: "col", localeText: ["subject", "主语"] }),
++        el("th", { scope: "col", localeText: ["predicate", "谓语"] }),
++        el("th", { scope: "col", localeText: ["object", "宾语"] }),
++        el("th", { scope: "col", localeText: ["graph", "图"] }),
+       ]),
+     ]),
+   );
+@@ -709,12 +692,13 @@ function makeTermCell(term, position) {
+       type: "button",
+       class: "term-link",
+       text: label,
+-      title: `Filter where ${position} = ${label}`,
++      localeTitle: [`Filter where ${position} = ${label}`, `筛选 ${TERM_POSITIONS_ZH[position]} = ${label}`],
+     });
+     btn.addEventListener("click", () => filterByTerm(position, term));
+     td.append(btn);
+   } else {
+-    td.textContent = label;
++    if (term?.termType === "DefaultGraph") localize(td, label, "（默认图）");
++    else td.textContent = label;
+   }
+   return td;
+ }
+@@ -724,7 +708,7 @@ async function filterByTerm(position, term) {
+     const args = { subject: null, predicate: null, object: null, graph: null };
+     args[position] = term;
+     const res = await call("match", args);
+-    renderQuadTable(res.rows, res.size, `${position} = ${termLabel(term)}`);
++    renderQuadTable(res.rows, res.size, { position, label: termLabel(term) });
+     selectPane("quads");
+   });
+ }
+@@ -740,6 +724,9 @@ async function refreshQuads() {
+ // Pane: Gallery
+ // ---------------------------------------------------------------------------
+ 
++let latestGalleryLoad;
++let editorRevision = 0;
++
+ function buildGallery() {
+   const list = $("gallery-list");
+   list.replaceChildren();
+@@ -747,7 +734,7 @@ function buildGallery() {
+     const loadBtn = el("button", {
+       type: "button",
+       class: "btn",
+-      text: "Load & run",
++      localeText: ["Load & run", "加载并运行"],
+       "data-load": v.id,
+     });
+     loadBtn.addEventListener("click", () => loadVignette(v.id));
+@@ -755,51 +742,49 @@ function buildGallery() {
+     const permaBtn = el("button", {
+       type: "button",
+       class: "btn-mini",
+-      text: "Copy permalink",
++      localeText: ["Copy permalink", "复制永久链接"],
+       "data-permalink": v.id,
+     });
+-    permaBtn.addEventListener("click", () => copyPermalink(vignetteState(v)));
++    permaBtn.addEventListener("click", () => copyPermalink(() => vignetteState(v)));
+ 
+     const item = el("li", { class: "gallery-item", id: `vignette-${v.id}` }, [
+-      el("h3", { text: v.title }),
+-      el("p", { class: "muted", text: v.blurb }),
++      el("h3", { localeText: [v.title, v.zhTitle] }),
++      el("p", { class: "muted", localeText: [v.blurb, v.zhBlurb] }),
+       el("div", { class: "gallery-actions" }, [loadBtn, permaBtn]),
+     ]);
+     list.append(item);
+   }
+ }
+ 
+-function vignetteState(v) {
+-  const s = { ...DEFAULT_STATE };
+-  s.input = v.input;
+-  s.inputFormat = v.inputFormat;
+-  if (v.query != null) s.query = v.query;
+-  if (v.shapes != null) s.shapes = v.shapes;
+-  // Vignettes that exercise identity supply their own A/B graphs; others
+-  // compare the loaded input against the supplied graph B.
+-  s.graphA = v.input;
+-  s.graphAFormat = v.inputFormat;
+-  if (v.graphB != null) {
+-    s.graphB = v.graphB;
+-    s.graphBFormat = v.graphBFormat ?? "turtle";
+-  }
+-  s.activePane = v.activePane ?? "input";
+-  return s;
+-}
+-
+ async function loadVignette(id) {
+   const v = findVignette(id);
+   if (!v) {
+-    showError(`unknown vignette: ${id}`);
++    showError(new InterfaceError(`unknown vignette: ${id}`, `未知示例：${id}`));
+     return;
+   }
+-  applyState(vignetteState(v));
+-  await runActiveForState(v);
++  const request = Symbol();
++  const revision = editorRevision;
++  latestGalleryLoad = request;
++  const isCurrent = () => latestGalleryLoad === request && editorRevision === revision;
++  await guard(async () => {
++    let state;
++    try {
++      state = await vignetteState(v);
++    } catch (error) {
++      // A slower, superseded fetch must not replace the current banner.
++      if (isCurrent()) throw error;
++      return;
++    }
++    if (!isCurrent()) return;
++    applyState(state);
++    await runActiveForState(v, isCurrent);
++  });
+ }
+ 
+ /** After loading a vignette, run the engine action its pane demonstrates. */
+-async function runActiveForState(v) {
++async function runActiveForState(v, isCurrent) {
+   await doParse();
++  if (!isCurrent()) return;
+   switch (v.activePane) {
+     case "roundtrip":
+       await doSerializeAll();
+@@ -809,7 +794,7 @@ async function runActiveForState(v) {
+       break;
+     case "shacl":
+       await doValidate();
+-      await doEntail();
++      if (isCurrent()) await doEntail();
+       break;
+     case "identity":
+       await doCompare();
+@@ -849,6 +834,19 @@ function wireTabs() {
+ }
+ 
+ function wireButtons() {
++  $("interface-language").addEventListener("change", (event) => setLocale(event.target.value));
++  // A gallery load replaces these fields, so a later edit wins even if the
++  // bundled fixture is still being fetched. Keep the gallery selection token
++  // separately so an edit never re-enables permalink startup after a click.
++  const noteEdit = () => { editorRevision++; };
++  for (const id of [
++    "input-text", "canonical-search", "sparql-text", "shapes-text", "graph-a-text", "graph-b-text",
++  ]) {
++    $(id).addEventListener("input", noteEdit);
++  }
++  for (const id of ["input-format", "graph-a-format", "graph-b-format"]) {
++    $(id).addEventListener("change", noteEdit);
++  }
+   $("btn-parse").addEventListener("click", doParse);
+   $("btn-serialize-all").addEventListener("click", doSerializeAll);
+   $("btn-run-query").addEventListener("click", doQuery);
+@@ -862,14 +860,12 @@ function wireButtons() {
+   $("btn-compare").addEventListener("click", doCompare);
+   $("btn-refresh-quads").addEventListener("click", refreshQuads);
+   $("btn-clear-filter").addEventListener("click", refreshQuads);
+-  $("btn-permalink").addEventListener("click", () => copyPermalink(collectState()));
++  $("btn-permalink").addEventListener("click", () => copyPermalink(collectState));
+ }
+ 
+ async function initHeader() {
+-  // The version handshake is the ONLY startup traffic; it goes over the worker
+-  // message port, not the network. The console makes NO network request after
+-  // its assets load — that provable property (no server-side evaluation) is
+-  // worth more than a cosmetic wasm-size chip, so the size probe is gone.
++  // The version handshake goes over the worker message port, not the network.
++  // The gallery can fetch bundled assets, but evaluation runs entirely in the worker.
+   await guard(async () => {
+     const { version } = await call("version", {});
+     $("app-version").textContent = `purrdf v${version}`;
+@@ -878,11 +874,13 @@ async function initHeader() {
+ 
+ function registerServiceWorker() {
+   if (!("serviceWorker" in navigator)) return;
+-  window.addEventListener("load", () => {
+-    navigator.serviceWorker
+-      .register(new URL("./sw.mjs", import.meta.url), { type: "module" })
+-      .catch((e) => showStatus(`offline cache unavailable: ${e.message ?? e}`));
+-  });
++  // The first worker parse can finish after window.load has already fired.
++  navigator.serviceWorker
++    .register(new URL("./sw.mjs", import.meta.url), { type: "module" })
++    .catch((e) => {
++      const detail = e.message ?? e;
++      showStatus(`offline cache unavailable: ${detail}`, `离线缓存不可用：${detail}`);
++    });
+ }
+ 
+ async function boot() {
+@@ -891,25 +889,52 @@ async function boot() {
+   buildGallery();
+ 
+   // Restore permalink state if present; otherwise the default console.
+-  let restored = false;
++  let restored;
++  let restoreError;
+   if (location.hash.length > 1) {
+     try {
+       const state = await decodeState(location.hash.slice(1));
+       if (state) {
++        setLocale(state.locale);
+         applyState(state);
+-        restored = true;
++        restored = state;
+       }
+     } catch (e) {
+-      showError(`could not restore permalink: ${e.message ?? e}`);
++      restoreError = interfaceFailure("could not restore permalink", "无法恢复永久链接", e);
+     }
+   }
+-  if (!restored) applyState(DEFAULT_STATE);
++  if (!restored) {
++    setLocale("en");
++    applyState(DEFAULT_STATE);
++  }
+ 
+   await initHeader();
+   // Parse the initial input so every pane has a live graph to work with.
+-  await doParse();
++  const parsed = await doParse();
++  if (restoreError && $("error-banner").hidden) showError(restoreError);
+ 
+   registerServiceWorker();
++
++  // The general query worker has no startup deadline or result bound. Auto-run
++  // only the known example, and leave the Run button in charge of other links.
++  if (!restored || !parsed || !stillAtRestoredQuery(restored, parsed)) return;
++  try {
++    if (await matchesBundledMuseumQuery(restored) && stillAtRestoredQuery(restored, parsed)) {
++      await doQuery();
++    }
++  } catch (error) {
++    if (stillAtRestoredQuery(restored, parsed)) {
++      showError(interfaceFailure("could not verify bundled museum example", "无法验证内置博物馆示例", error));
++    }
++  }
++}
++
++function stillAtRestoredQuery(state, parsed) {
++  return !queryStarted && !latestGalleryLoad && latestParse === parsed &&
++    activePane === "sparql" && state.activePane === "sparql" &&
++    parsed.text === state.input && parsed.format === state.inputFormat &&
++    $("input-text").value === parsed.text && $("input-format").value === parsed.format &&
++    $("sparql-text").value === state.query;
+ }
+ 
+ boot();
+diff --git docs/playground/engine.worker.mjs docs/playground/engine.worker.mjs
+index f1bdee172..595bc472a 100644
+--- docs/playground/engine.worker.mjs
++++ docs/playground/engine.worker.mjs
+@@ -179,6 +179,7 @@ const HANDLERS = {
+             : ds.serialize(f);
+       } catch (e) {
+         entry.error = String(e?.message ?? e);
++        if (typeof e?.code === "string") entry.errorCode = e.code;
+       }
+       entry.text = text;
+       if (text != null) {
+diff --git docs/playground/examples/gallery.mjs docs/playground/examples/gallery.mjs
+index e1202f814..f5b6202de 100644
+--- docs/playground/examples/gallery.mjs
++++ docs/playground/examples/gallery.mjs
+@@ -1,29 +1,48 @@
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ //
+-// Curated RDF-1.2 vignettes for the PurRDF console. Every fixture uses
+-// http://example.org/ IRIs and only standard rdf:/sh:/xsd: vocabulary — PurRDF
+-// mints no vocabulary of its own. Each vignette is a complete console state:
++// Curated RDF-1.2 vignettes for the PurRDF console. Fixtures use example.org
++// identifiers and provide their own vocabulary alongside standard terms.
++// Each vignette is a complete console state:
+ // selecting one loads the Input/SPARQL/SHACL/graph-B panes and runs it.
+ 
+ /** @typedef {{
+  *   id: string,
+  *   title: string,
+  *   blurb: string,
+- *   input: string,
++ *   zhTitle: string,
++ *   zhBlurb: string,
++ *   input?: string,
+  *   inputFormat: string,
+  *   query?: string,
++ *   files?: { input: string, query: string },
+  *   shapes?: string,
+  *   graphB?: string,
+  *   graphBFormat?: string,
+  *   activePane?: string,
+  * }} Vignette */
+ 
++import { InterfaceError, interfaceFailure } from "../locale.mjs";
++
+ const RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+ 
+ /** @type {Vignette[]} */
+ export const VIGNETTES = [
++  {
++    id: "museum-attributions",
++    zhTitle: "博物馆藏品（中文标签）",
++    zhBlurb: "两份资料对莲纹碗的年代记载不同。RDF 1.2 注解将各个日期与其来源配对。",
++    title: "Museum collection (Chinese labels)",
++    blurb:
++      "Two sources disagree on the date of a lotus-pattern bowl. " +
++      "RDF 1.2 annotations keep each date paired with its source.",
++    inputFormat: "turtle",
++    files: { input: "./museum/collection.ttl", query: "./museum/attributions.rq" },
++    activePane: "sparql",
++  },
+   {
+     id: "quoted-triple",
++    zhTitle: "所引用三元组的具体化",
++    zhBlurb: "三元组项位于宾语位置。ex:alice 陈述 «ex:bob ex:likes ex:carol» 并记录其溯源信息。",
+     title: "Quoted-triple reification",
+     blurb:
+       "An RDF-1.2 triple term in object position: ex:alice asserts the statement " +
+@@ -45,6 +64,8 @@ SELECT ?who ?claim WHERE {
+   },
+   {
+     id: "directional-literals",
++    zhTitle: "带书写方向的字面量（ltr 和 rtl）",
++    zhBlurb: "两个字面量均显式指定基础方向：英语从左到右，阿拉伯语从右到左。",
+     title: "Directional literals (ltr + rtl)",
+     blurb:
+       "RDF-1.2 base-direction literals: an English left-to-right string and an " +
+@@ -63,6 +84,8 @@ SELECT ?subject ?text WHERE {
+   },
+   {
+     id: "shacl-af-rule",
++    zhTitle: "SHACL-AF 的 sh:rule 蕴涵",
++    zhBlurb: "SHACL-AF 的三元组规则推导每位 ex:Person 的 ex:adult 属性为 ex:yes。验证可查看 SARIF 报告，物化可显示推导出的三元组。",
+     title: "SHACL-AF sh:rule entailment",
+     blurb:
+       "A SHACL Advanced-Features triple rule: every ex:Person is entailed to be " +
+@@ -93,6 +116,8 @@ ex:PersonShape
+   },
+   {
+     id: "isomorphic-pair",
++    zhTitle: "同构图（空节点标签不同）",
++    zhBlurb: "图 A 和图 B 只在空节点标签和排列顺序上不同。比较可验证同构并显示相同的规范形式。",
+     title: "Isomorphic graphs (relabeled blank nodes)",
+     blurb:
+       "Graph A and Graph B name the same RDF graph under blank-node relabeling and " +
+@@ -115,6 +140,8 @@ _:x ex:knows _:y .
+   },
+   {
+     id: "service-hardfail",
++    zhTitle: "SERVICE 显式报错",
++    zhBlurb: "浏览器没有服务器，无法解析联邦 SERVICE 子句。运行查询会显示引擎错误，不会悄悄返回空结果。",
+     title: "SERVICE hard-fail (never-silent errors)",
+     blurb:
+       "There is no server: a federated SERVICE clause cannot be resolved in-browser. " +
+@@ -140,6 +167,56 @@ export function findVignette(id) {
+   return VIGNETTES.find((v) => v.id === id);
+ }
+ 
++async function fixtureText(path, fetchAsset) {
++  const english = `could not load gallery fixture ${path}`;
++  const chinese = `无法加载示例文件 ${path}`;
++  let response;
++  try {
++    response = await fetchAsset(new URL(path, import.meta.url));
++  } catch (error) {
++    throw interfaceFailure(english, chinese, error);
++  }
++  if (!response.ok) throw new InterfaceError(
++    `${english} (HTTP ${response.status})`,
++    `${chinese}（HTTP ${response.status}）`,
++  );
++  try {
++    return await response.text();
++  } catch (error) {
++    throw interfaceFailure(english, chinese, error);
++  }
++}
++
++/** Build the same complete state for Load & run and Copy permalink. */
++export async function vignetteState(v, fetchAsset = (url) => fetch(url)) {
++  const [input, query] = v.files
++    ? await Promise.all([fixtureText(v.files.input, fetchAsset), fixtureText(v.files.query, fetchAsset)])
++    : [v.input, v.query];
++  const s = { ...DEFAULT_STATE };
++  s.input = input;
++  s.inputFormat = v.inputFormat;
++  if (query != null) s.query = query;
++  if (v.shapes != null) s.shapes = v.shapes;
++  // Identity vignettes can supply a distinct comparison graph.
++  s.graphA = input;
++  s.graphAFormat = v.inputFormat;
++  if (v.graphB != null) {
++    s.graphB = v.graphB;
++    s.graphBFormat = v.graphBFormat ?? "turtle";
++  }
++  s.activePane = v.activePane ?? "input";
++  return s;
++}
++
++/** Only the bundled museum graph and query can run on permalink startup. */
++export async function matchesBundledMuseumQuery(state, fetchAsset) {
++  const museum = findVignette("museum-attributions");
++  if (state?.activePane !== "sparql" || state.inputFormat !== museum.inputFormat ||
++      typeof state.input !== "string" || typeof state.query !== "string") return false;
++  const bundled = await vignetteState(museum, fetchAsset);
++  return state.input === bundled.input && state.query === bundled.query;
++}
++
+ /** The default console state used on a cold load (no permalink). */
+ export const DEFAULT_STATE = {
+   input: `@prefix ex: <http://example.org/> .
+diff --git docs/playground/index.html docs/playground/index.html
+index 00f910b74..d5ea7dbd8 100644
+--- docs/playground/index.html
++++ docs/playground/index.html
+@@ -6,10 +6,11 @@
+     <meta name="viewport" content="width=device-width, initial-scale=1" />
+     <meta
+       name="description"
++      data-zh-description="PurRDF 的 RDF 1.2 控制台可在浏览器中解析、序列化、查询、验证和比较图，无需服务器。"
+       content="PurRDF · a client-side RDF-1.2 console. Parse, serialize, query (SPARQL), validate (SHACL), and compare graphs entirely in your browser — no server."
+     />
+     <meta name="color-scheme" content="light dark" />
+-    <title>PurRDF · RDF-1.2 console</title>
++    <title data-zh-text="PurRDF · RDF 1.2 控制台">PurRDF · RDF-1.2 console</title>
+     <link rel="stylesheet" href="./style.css" />
+     <link rel="manifest" href="./manifest.webmanifest" />
+     <!-- Inline data-URI icon: no external asset, no favicon.ico round-trip. -->
+@@ -19,21 +20,26 @@
+     />
+   </head>
+   <body>
+-    <a class="skip-link" href="#pane-input">Skip to console</a>
++    <a class="skip-link" href="#pane-input" data-zh-text="跳转到控制台">Skip to console</a>
+ 
+     <header class="app-header">
+       <div class="brand">
+-        <h1>PurRDF <span class="dot">·</span> RDF-1.2 console</h1>
+-        <p class="tagline">
++        <h1 data-zh-html="PurRDF &lt;span class=&quot;dot&quot;&gt;·&lt;/span&gt; RDF 1.2 控制台">PurRDF <span class="dot">·</span> RDF-1.2 console</h1>
++        <p class="tagline" data-zh-html="RDF 1.2 工作台无需服务器。PurRDF 的 WebAssembly 引擎直接在浏览器中运行。">
+           A zero-backend RDF-1.2 workbench: everything runs in your browser via
+           the PurRDF wasm engine.
+         </p>
+       </div>
+       <div class="header-meta">
+-        <span id="app-version" class="chip" aria-label="engine version">purrdf</span>
+-        <a class="chip chip-link" href="../">The PurRDF Book</a>
+-        <a class="chip chip-link" href="./purrdf/licenses/NOTICE.txt">Licenses and notices</a>
+-        <button id="btn-permalink" type="button" class="btn-mini">
++        <label for="interface-language" data-zh-text="界面语言">Interface language</label>
++        <select id="interface-language" class="select">
++          <option value="en" lang="en">English</option>
++          <option value="zh-Hans" lang="zh-Hans">简体中文</option>
++        </select>
++        <span id="app-version" class="chip" aria-label="engine version" data-zh-label="引擎版本">purrdf</span>
++        <a class="chip chip-link" href="../" data-zh-text="《PurRDF 手册》">The PurRDF Book</a>
++        <a class="chip chip-link" href="./purrdf/licenses/NOTICE.txt" data-zh-text="许可证与声明">Licenses and notices</a>
++        <button id="btn-permalink" type="button" class="btn-mini" data-zh-text="复制永久链接">
+           Copy permalink
+         </button>
+       </div>
+@@ -55,36 +61,36 @@
+       hidden
+     ></div>
+ 
+-    <p class="jsonld-note" role="note">
++    <p class="jsonld-note" role="note" data-zh-html="JSON-LD 和 YAML-LD 都是&lt;strong&gt;一等双向&lt;/strong&gt;编解码器。JSON-LD-star 的 &lt;code&gt;@triple&lt;/code&gt; 编码可无损往返转换宾语位置的所引用三元组。">
+       Note: JSON-LD and YAML-LD are <strong>first-class bidirectional</strong> codecs
+       here. Their JSON-LD-star <code>@triple</code> encoding round-trips
+       object-position quoted triples losslessly.
+     </p>
+ 
+     <div class="field">
+-      <label for="canonical-search">Canonical search limit</label>
+-      <input id="canonical-search" class="input" type="text" placeholder="Enter a call limit or unlimited" aria-describedby="canonical-search-help" />
+-      <p id="canonical-search-help">Required for graph identity, round-trip comparison and SHACL entailment. A finite limit stops difficult blank-node searches; unlimited removes that limit.</p>
++      <label for="canonical-search" data-zh-text="规范化搜索上限">Canonical search limit</label>
++      <input id="canonical-search" class="input" type="text" placeholder="Enter a call limit or unlimited" data-zh-placeholder="输入调用次数上限或 unlimited" aria-describedby="canonical-search-help" />
++      <p id="canonical-search-help" data-zh-html="图标识、往返比较和 SHACL 蕴涵需要此设置。有限上限可终止复杂的空节点搜索；输入 &lt;code&gt;unlimited&lt;/code&gt; 则取消该限制。">Required for graph identity, round-trip comparison and SHACL entailment. A finite limit stops difficult blank-node searches; unlimited removes that limit.</p>
+     </div>
+ 
+-    <nav class="tabs" aria-label="Console panes">
+-      <div role="tablist" aria-label="Console panes">
+-        <button id="tab-input" role="tab" aria-selected="true" aria-controls="pane-input" class="tab">Input</button>
+-        <button id="tab-roundtrip" role="tab" aria-selected="false" aria-controls="pane-roundtrip" class="tab" tabindex="-1">Round-trip</button>
++    <nav class="tabs" aria-label="Console panes" data-zh-label="控制台面板">
++      <div role="tablist" aria-label="Console panes" data-zh-label="控制台面板">
++        <button id="tab-input" role="tab" aria-selected="true" aria-controls="pane-input" class="tab" data-zh-text="输入">Input</button>
++        <button id="tab-roundtrip" role="tab" aria-selected="false" aria-controls="pane-roundtrip" class="tab" tabindex="-1" data-zh-text="往返转换">Round-trip</button>
+         <button id="tab-sparql" role="tab" aria-selected="false" aria-controls="pane-sparql" class="tab" tabindex="-1">SPARQL</button>
+         <button id="tab-shacl" role="tab" aria-selected="false" aria-controls="pane-shacl" class="tab" tabindex="-1">SHACL</button>
+-        <button id="tab-identity" role="tab" aria-selected="false" aria-controls="pane-identity" class="tab" tabindex="-1">Graph identity</button>
+-        <button id="tab-quads" role="tab" aria-selected="false" aria-controls="pane-quads" class="tab" tabindex="-1">Quad table</button>
+-        <button id="tab-gallery" role="tab" aria-selected="false" aria-controls="pane-gallery" class="tab" tabindex="-1">Gallery</button>
++        <button id="tab-identity" role="tab" aria-selected="false" aria-controls="pane-identity" class="tab" tabindex="-1" data-zh-text="图标识">Graph identity</button>
++        <button id="tab-quads" role="tab" aria-selected="false" aria-controls="pane-quads" class="tab" tabindex="-1" data-zh-text="四元组表">Quad table</button>
++        <button id="tab-gallery" role="tab" aria-selected="false" aria-controls="pane-gallery" class="tab" tabindex="-1" data-zh-text="示例库">Gallery</button>
+       </div>
+     </nav>
+ 
+     <main>
+       <!-- INPUT -->
+       <section id="pane-input" class="pane" role="tabpanel" aria-labelledby="tab-input">
+-        <h2>Input graph</h2>
++        <h2 data-zh-text="输入图">Input graph</h2>
+         <div class="field">
+-          <label for="input-format">Parse format</label>
++          <label for="input-format" data-zh-text="解析格式">Parse format</label>
+           <select id="input-format" class="select">
+             <option value="turtle">Turtle</option>
+             <option value="ntriples">N-Triples</option>
+@@ -98,24 +104,24 @@
+           </select>
+         </div>
+         <div class="field">
+-          <label for="input-text">RDF document</label>
++          <label for="input-text" data-zh-text="RDF 文档">RDF document</label>
+           <textarea id="input-text" class="code" spellcheck="false" rows="14" aria-describedby="input-summary"></textarea>
+         </div>
+         <div class="actions">
+-          <button id="btn-parse" type="button" class="btn btn-primary">Parse</button>
++          <button id="btn-parse" type="button" class="btn btn-primary" data-zh-text="解析">Parse</button>
+         </div>
+         <p id="input-summary" class="muted" aria-live="polite"></p>
+       </section>
+ 
+       <!-- ROUND-TRIP -->
+       <section id="pane-roundtrip" class="pane" role="tabpanel" aria-labelledby="tab-roundtrip" hidden>
+-        <h2>Round-trip &amp; differential</h2>
+-        <p class="muted">
++        <h2 data-zh-text="往返转换与差异比较">Round-trip &amp; differential</h2>
++        <p class="muted" data-zh-html="并排显示当前图的各种序列化格式。规范化逐行 N-Quads 形式是图的确定性标识。">
+           Render the current graph in all nine serialize formats side-by-side. The
+           canonical line-sequence N-Quads form is the graph's deterministic identity.
+         </p>
+         <div class="actions">
+-          <button id="btn-serialize-all" type="button" class="btn btn-primary">
++          <button id="btn-serialize-all" type="button" class="btn btn-primary" data-zh-text="序列化为所有格式">
+             Serialize to all formats
+           </button>
+         </div>
+@@ -126,17 +132,17 @@
+       <!-- SPARQL -->
+       <section id="pane-sparql" class="pane" role="tabpanel" aria-labelledby="tab-sparql" hidden>
+         <h2>SPARQL</h2>
+-        <p class="muted">
++        <p class="muted" data-zh-html="SELECT 和 ASK 分别显示表格和布尔值；CONSTRUCT 和 DESCRIBE 显示 Turtle。浏览器没有服务器，SERVICE 和 LOAD 失败时会在上方显示错误。">
+           SELECT / ASK render as a table / boolean; CONSTRUCT / DESCRIBE render as
+           Turtle. SERVICE and LOAD hard-fail (there is no server) — the error lands
+           in the banner above.
+         </p>
+         <div class="field">
+-          <label for="sparql-text">Query</label>
++          <label for="sparql-text" data-zh-text="查询">Query</label>
+           <textarea id="sparql-text" class="code" spellcheck="false" rows="10"></textarea>
+         </div>
+         <div class="actions">
+-          <button id="btn-run-query" type="button" class="btn btn-primary">Run</button>
++          <button id="btn-run-query" type="button" class="btn btn-primary" data-zh-text="运行">Run</button>
+         </div>
+         <div id="sparql-results" class="results" aria-live="polite"></div>
+       </section>
+@@ -144,38 +150,38 @@
+       <!-- SHACL -->
+       <section id="pane-shacl" class="pane" role="tabpanel" aria-labelledby="tab-shacl" hidden>
+         <h2>SHACL</h2>
+-        <p class="muted">
++        <p class="muted" data-zh-html="将当前图序列化为 N-Triples 后，依据所提供的形状进行验证。结果采用 SARIF 2.1.0。物化会应用 SHACL-AF 的 &lt;code&gt;sh:rule&lt;/code&gt; 推理。">
+           The current graph is serialized to N-Triples and validated against your
+           shapes. Results are a SARIF 2.1.0 report. Materialize applies SHACL-AF
+           <code>sh:rule</code> inferences.
+         </p>
+         <div class="field">
+-          <label for="shapes-text">Shapes (Turtle)</label>
++          <label for="shapes-text" data-zh-text="形状（Turtle）">Shapes (Turtle)</label>
+           <textarea id="shapes-text" class="code" spellcheck="false" rows="14"></textarea>
+         </div>
+         <div class="actions">
+-          <button id="btn-validate" type="button" class="btn btn-primary">Validate</button>
+-          <button id="btn-entail" type="button" class="btn">Materialize (entail)</button>
+-          <button id="btn-download-sarif" type="button" class="btn" disabled>
++          <button id="btn-validate" type="button" class="btn btn-primary" data-zh-text="验证">Validate</button>
++          <button id="btn-entail" type="button" class="btn" data-zh-text="物化（蕴涵）">Materialize (entail)</button>
++          <button id="btn-download-sarif" type="button" class="btn" disabled data-zh-text="下载 report.sarif">
+             Download report.sarif
+           </button>
+         </div>
+         <div id="sarif-results" class="results" aria-live="polite"></div>
+-        <h3>Entailed N-Triples</h3>
++        <h3 data-zh-text="蕴涵所得的 N-Triples">Entailed N-Triples</h3>
+         <pre id="entail-output" class="code-out" aria-live="polite"></pre>
+       </section>
+ 
+       <!-- IDENTITY -->
+       <section id="pane-identity" class="pane" role="tabpanel" aria-labelledby="tab-identity" hidden>
+-        <h2>Graph identity &amp; diff</h2>
+-        <p class="muted">
++        <h2 data-zh-text="图标识与差异">Graph identity &amp; diff</h2>
++        <p class="muted" data-zh-html="当且仅当两个图的规范化逐行形式逐字节相同，两者才表示同一个 RDF 图。空节点改名或重排不影响结果。">
+           Two graphs denote the same RDF graph iff their canonical line-sequence forms
+           are byte-identical — even after blank-node relabeling and reordering.
+         </p>
+         <div class="two-col">
+           <div>
+             <div class="field">
+-              <label for="graph-a-format">Graph A format</label>
++              <label for="graph-a-format" data-zh-text="图 A 的格式">Graph A format</label>
+               <select id="graph-a-format" class="select">
+                 <option value="turtle">Turtle</option>
+                 <option value="ntriples">N-Triples</option>
+@@ -187,13 +193,13 @@
+               </select>
+             </div>
+             <div class="field">
+-              <label for="graph-a-text">Graph A</label>
++              <label for="graph-a-text" data-zh-text="图 A">Graph A</label>
+               <textarea id="graph-a-text" class="code" spellcheck="false" rows="10"></textarea>
+             </div>
+           </div>
+           <div>
+             <div class="field">
+-              <label for="graph-b-format">Graph B format</label>
++              <label for="graph-b-format" data-zh-text="图 B 的格式">Graph B format</label>
+               <select id="graph-b-format" class="select">
+                 <option value="turtle">Turtle</option>
+                 <option value="ntriples">N-Triples</option>
+@@ -205,39 +211,39 @@
+               </select>
+             </div>
+             <div class="field">
+-              <label for="graph-b-text">Graph B</label>
++              <label for="graph-b-text" data-zh-text="图 B">Graph B</label>
+               <textarea id="graph-b-text" class="code" spellcheck="false" rows="10"></textarea>
+             </div>
+           </div>
+         </div>
+         <div class="actions">
+-          <button id="btn-compare" type="button" class="btn btn-primary">Compare</button>
++          <button id="btn-compare" type="button" class="btn btn-primary" data-zh-text="比较">Compare</button>
+         </div>
+         <p id="identity-result" class="identity-verdict" aria-live="polite"></p>
+         <div class="two-col">
+           <div>
+-            <h3>Canonical A</h3>
++            <h3 data-zh-text="图 A 的规范形式">Canonical A</h3>
+             <pre id="canon-a" class="code-out"></pre>
+           </div>
+           <div>
+-            <h3>Canonical B</h3>
++            <h3 data-zh-text="图 B 的规范形式">Canonical B</h3>
+             <pre id="canon-b" class="code-out"></pre>
+           </div>
+         </div>
+-        <h3>Line diff</h3>
++        <h3 data-zh-text="逐行差异">Line diff</h3>
+         <div id="canon-diff" class="diff"></div>
+       </section>
+ 
+       <!-- QUAD TABLE -->
+       <section id="pane-quads" class="pane" role="tabpanel" aria-labelledby="tab-quads" hidden>
+-        <h2>Quad table</h2>
+-        <p class="muted">
++        <h2 data-zh-text="四元组表">Quad table</h2>
++        <p class="muted" data-zh-html="以主语、谓语、宾语和图显示解析后的数据。点击任意项，使用 &lt;code&gt;match()&lt;/code&gt; 筛选表格。">
+           The parsed graph as (subject, predicate, object, graph). Click any term
+           to filter the table with <code>match()</code>.
+         </p>
+         <div class="actions">
+-          <button id="btn-refresh-quads" type="button" class="btn btn-primary">Refresh</button>
+-          <button id="btn-clear-filter" type="button" class="btn" hidden>Clear filter</button>
++          <button id="btn-refresh-quads" type="button" class="btn btn-primary" data-zh-text="刷新">Refresh</button>
++          <button id="btn-clear-filter" type="button" class="btn" hidden data-zh-text="清除筛选条件">Clear filter</button>
+         </div>
+         <p id="filter-info" class="muted" aria-live="polite"></p>
+         <div id="quad-table" class="results"></div>
+@@ -245,8 +251,8 @@
+ 
+       <!-- GALLERY -->
+       <section id="pane-gallery" class="pane" role="tabpanel" aria-labelledby="tab-gallery" hidden>
+-        <h2>RDF-1.2 vignette gallery</h2>
+-        <p class="muted">
++        <h2 data-zh-text="RDF 1.2 示例库">RDF-1.2 vignette gallery</h2>
++        <p class="muted" data-zh-html="示例均使用 &lt;code&gt;http://example.org/&lt;/code&gt; 命名空间。加载示例会填充并运行控制台；复制永久链接可分享当前状态。">
+           Curated, self-contained examples in the <code>http://example.org/</code>
+           namespace. Load one to populate the whole console and run it; copy a
+           permalink to share the exact state.
+@@ -256,7 +262,7 @@
+     </main>
+ 
+     <footer class="app-footer">
+-      <p>
++      <p data-zh-html="PurRDF 完全在客户端运行，加载的图不会离开浏览器。PurRDF 不创建词汇表，这里仅使用标准 &lt;code&gt;rdf:&lt;/code&gt;、&lt;code&gt;sh:&lt;/code&gt; 和 &lt;code&gt;xsd:&lt;/code&gt; 词汇。">
+         PurRDF runs entirely client-side. No graph you load here ever leaves your
+         browser. Standard <code>rdf:</code>/<code>sh:</code>/<code>xsd:</code>
+         vocabulary only — PurRDF mints none of its own.
+diff --git docs/playground/locale.mjs docs/playground/locale.mjs
+new file mode 100644
+index 000000000..72dd3c185
+--- /dev/null
++++ docs/playground/locale.mjs
+@@ -0,0 +1,98 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc.
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++// Why not Rust: Locale changes apply to browser DOM labels and preserve live focus.
++
++const staticEnglish = new WeakMap();
++const dynamic = Symbol("localized UI");
++const attributes = [
++  ["data-zh-text", (node) => node.textContent, (node, text) => { node.textContent = text; }],
++  // Only source-authored HTML in the shell uses this pair, never result data.
++  ["data-zh-html", (node) => node.innerHTML, (node, html) => { node.innerHTML = html; }],
++  ["data-zh-label", (node) => node.getAttribute("aria-label"), (node, text) => node.setAttribute("aria-label", text)],
++  ["data-zh-placeholder", (node) => node.placeholder, (node, text) => { node.placeholder = text; }],
++  ["data-zh-description", (node) => node.content, (node, text) => { node.content = text; }],
++];
++
++export const selectedLocale = () => document.documentElement.lang;
++
++/** Older links and unsupported locale values use the English default. */
++export const normalizeLocale = (value) => value === "zh-Hans" ? value : "en";
++
++/** Share presentation preferences without adding them to gallery or worker inputs. */
++export const withLocale = (state, locale) => ({ ...state, locale: normalizeLocale(locale) });
++
++/** Keep raw browser details separate from the interface's description. */
++export function interfaceFailure(english, chinese, error) {
++  const detail = String(error?.message ?? error);
++  const detailZh = error instanceof InterfaceError ? error.chinese : detail;
++  return new InterfaceError(`${english}: ${detail}`, `${chinese}：${detailZh}`);
++}
++
++/** Describe the same serializer outcomes without translating format names. */
++export function roundTripNote(quotedObject, failed, degraders = [], survivors = []) {
++  const refused = failed.join(", ");
++  if (!quotedObject) {
++    return [
++      "No object-position quoted triple in this graph. N-Quads and the canonical " +
++        "line-sequence form remain the deterministic identity reference." +
++        (refused ? ` Formats that hard-failed: ${refused}.` : ""),
++      "此图的宾语位置没有所引用三元组。N-Quads 和规范化逐行形式仍可作为确定性图标识的依据。" +
++        (refused ? `无法编码此图的格式：${refused}。` : ""),
++    ];
++  }
++  const lossy = degraders.join(", ");
++  const lossless = survivors.join(", ");
++  return [
++    "This graph carries a quoted triple in object position. " +
++      (refused ? `These formats cannot even encode it (hard-fail): ${refused}. ` : "") +
++      (lossy ? `These text formats round-trip lossily: ${lossy}. ` : "") +
++      "N-Quads and the canonical line-sequence form are the reliable identity reference; " +
++      `round-tripping formats here: ${lossless}.`,
++    "此图的宾语位置包含所引用三元组。" +
++      (refused ? `无法编码此图的格式：${refused}。` : "") +
++      (lossy ? `往返转换有损的文本格式：${lossy}。` : "") +
++      "N-Quads 和规范化逐行形式可作为可靠的图标识依据。" +
++      `可无损往返转换的格式：${lossless}。`,
++  ];
++}
++
++export function sarifWarningLabels(english, actual, expected) {
++  return [english, `SARIF 版本不受支持：${actual ?? "（无）"}；控制台要求 SARIF ${expected}。`];
++}
++
++/** Translations belong to view nodes, so language changes do not rerun actions. */
++export function localize(node, english, chinese, property = "textContent") {
++  if (!node[dynamic]) {
++    node[dynamic] = new Map();
++    node.setAttribute("data-localized", "");
++  }
++  node[dynamic].set(property, [english, chinese]);
++  node[property] = selectedLocale() === "zh-Hans" ? chinese : english;
++}
++
++/** A translated wrapper for UI failures, never for engine diagnostics. */
++export class InterfaceError extends Error {
++  constructor(english, chinese) {
++    super(english);
++    this.chinese = chinese;
++  }
++}
++
++/** Missing and unsupported permalink values both use the English default. */
++export function setLocale(value) {
++  const locale = normalizeLocale(value);
++  const chinese = locale === "zh-Hans";
++  document.documentElement.lang = locale;
++  document.getElementById("interface-language").value = locale;
++  for (const [attribute, read, write] of attributes) {
++    for (const node of document.querySelectorAll(`[${attribute}]`)) {
++      if (!staticEnglish.has(node)) staticEnglish.set(node, new Map());
++      const values = staticEnglish.get(node);
++      if (!values.has(attribute)) values.set(attribute, read(node));
++      write(node, chinese ? node.getAttribute(attribute) : values.get(attribute));
++    }
++  }
++  for (const node of document.querySelectorAll("[data-localized]")) {
++    for (const [property, [en, zh]] of node[dynamic]) node[property] = chinese ? zh : en;
++  }
++}
+diff --git docs/playground/permalink.mjs docs/playground/permalink.mjs
+new file mode 100644
+index 000000000..f0e3c49a5
+--- /dev/null
++++ docs/playground/permalink.mjs
+@@ -0,0 +1,67 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++// Why not Rust: URL sharing uses the browser's UTF-8 and compression interfaces.
++
++const b64urlEncode = (bytes) => {
++  let bin = "";
++  for (const byte of bytes) bin += String.fromCharCode(byte);
++  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
++};
++
++const b64urlDecode = (s) => {
++  const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
++  const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
++  const bytes = new Uint8Array(bin.length);
++  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
++  return bytes;
++};
++
++async function streamThrough(stream, bytes) {
++  const writer = stream.writable.getWriter();
++  writer.write(bytes);
++  writer.close();
++  const chunks = [];
++  const reader = stream.readable.getReader();
++  for (;;) {
++    const { done, value } = await reader.read();
++    if (done) break;
++    chunks.push(value);
++  }
++  let len = 0;
++  for (const c of chunks) len += c.length;
++  const out = new Uint8Array(len);
++  let off = 0;
++  for (const c of chunks) {
++    out.set(c, off);
++    off += c.length;
++  }
++  return out;
++}
++
++/** Encode state → (gzip when available) → base64url. All client-side, no network. */
++export async function encodeState(state) {
++  const json = new TextEncoder().encode(JSON.stringify(state));
++  if (typeof CompressionStream === "function") {
++    const gz = await streamThrough(new CompressionStream("gzip"), json);
++    return `g${b64urlEncode(gz)}`;
++  }
++  // Documented capability fallback: plain base64url of the JSON.
++  return `j${b64urlEncode(json)}`;
++}
++
++export async function decodeState(fragment) {
++  if (!fragment) return null;
++  const tag = fragment[0];
++  const body = fragment.slice(1);
++  const bytes = b64urlDecode(body);
++  let jsonBytes = bytes;
++  if (tag === "g") {
++    if (typeof DecompressionStream !== "function") {
++      throw new Error("this permalink is gzip-encoded but DecompressionStream is unavailable");
++    }
++    jsonBytes = await streamThrough(new DecompressionStream("gzip"), bytes);
++  } else if (tag !== "j") {
++    throw new Error("unrecognized permalink encoding");
++  }
++  return JSON.parse(new TextDecoder().decode(jsonBytes));
++}
+diff --git docs/playground/smoke/engine.smoke.test.mjs docs/playground/smoke/engine.smoke.test.mjs
+index e562adaeb..602b2d204 100644
+--- docs/playground/smoke/engine.smoke.test.mjs
++++ docs/playground/smoke/engine.smoke.test.mjs
+@@ -8,18 +8,22 @@
+ 
+ import { test } from "node:test";
+ import assert from "node:assert/strict";
++import { readFile } from "node:fs/promises";
+ import { join } from "node:path";
+ import { pathToFileURL } from "node:url";
+ 
+-import {
++import { canonicalValue } from "../../../crates/rdf-wasm/js/tests/fixtures/poisoned-surface.mjs";
++
++const playgroundOut = process.env.PLAYGROUND_OUT;
++assert.ok(playgroundOut, "PLAYGROUND_OUT must point at the assembled console");
++const {
+   ready,
+   Dataset,
+   DataFactory,
+   shaclValidateToSarif,
+   shaclEntail,
+   version,
+-} from "../../../crates/rdf-wasm/js/index.mjs";
+-import { canonicalValue } from "../../../crates/rdf-wasm/js/tests/fixtures/poisoned-surface.mjs";
++} = await import(pathToFileURL(join(playgroundOut, "purrdf/index.mjs")).href);
+ 
+ // The exact preloaded document the Input pane ships with: an RDF-1.2 graph in the
+ // example.org namespace carrying a quoted triple in object position plus base-
+@@ -81,8 +85,6 @@ globalThis.self = {
+     workerMessages.push(message);
+   },
+ };
+-const playgroundOut = process.env.PLAYGROUND_OUT;
+-assert.ok(playgroundOut, "PLAYGROUND_OUT must point at the assembled console");
+ await import(pathToFileURL(join(playgroundOut, "engine.worker.mjs")).href);
+ assert.equal(typeof workerMessageHandler, "function");
+ 
+@@ -101,6 +103,43 @@ test("version() returns a SemVer string", () => {
+   assert.match(v, /^\d+\.\d+\.\d+/, `expected SemVer, got ${v}`);
+ });
+ 
++test("the assembled interface switches its language and visible text", async () => {
++  const { interfaceFailure, localize, setLocale } =
++    await import(pathToFileURL(join(playgroundOut, "locale.mjs")).href);
++  const html = await readFile(join(playgroundOut, "index.html"), "utf8");
++  assert.match(html, /<select id="interface-language"[^>]*>[\s\S]*?<option value="zh-Hans"/u);
++  const parse = html.match(/<button id="btn-parse"[^>]*data-zh-text="([^"]+)"[^>]*>([^<]+)<\/button>/u);
++  assert.ok(parse, "the packaged Parse button has interface copy in both languages");
++  const button = { textContent: parse[2], getAttribute: () => parse[1] };
++  const language = { value: "en" };
++  const status = { setAttribute() {} };
++  const document = {
++    documentElement: { lang: "en" },
++    getElementById: (id) => id === "interface-language" ? language : null,
++    querySelectorAll: (selector) => selector === "[data-zh-text]" ? [button]
++      : selector === "[data-localized]" ? [status] : [],
++  };
++  const previous = globalThis.document;
++  globalThis.document = document;
++  try {
++    const raw = "Network failure < & 404.";
++    const nested = interfaceFailure("could not fetch fixture", "无法加载示例文件", new Error(raw));
++    const banner = interfaceFailure("could not verify museum", "无法验证博物馆示例", nested);
++    localize(status, banner.message, banner.chinese);
++    setLocale("zh-Hans");
++    assert.deepEqual([document.documentElement.lang, language.value, button.textContent],
++      ["zh-Hans", "zh-Hans", "解析"]);
++    assert.equal(status.textContent, `无法验证博物馆示例：无法加载示例文件：${raw}`);
++    setLocale("en");
++    assert.deepEqual([document.documentElement.lang, language.value, button.textContent],
++      ["en", "en", "Parse"]);
++    assert.equal(status.textContent, `could not verify museum: could not fetch fixture: ${raw}`);
++  } finally {
++    if (previous === undefined) delete globalThis.document;
++    else globalThis.document = previous;
++  }
++});
++
+ test("parse the preloaded doc (Input pane)", () => {
+   const ds = Dataset.parse(PRELOADED, "turtle");
+   assert.equal(ds.size, 5);
+@@ -188,6 +227,67 @@ test("SELECT query returns SRJ with bindings (SPARQL pane)", () => {
+   assert.ok(srj.results.bindings.length > 0, "expected bindings");
+ });
+ 
++test("the museum gallery permalink preserves both dated attributions", async () => {
++  const { findVignette, matchesBundledMuseumQuery, vignetteState } =
++    await import(pathToFileURL(join(playgroundOut, "examples/gallery.mjs")).href);
++  const { encodeState, decodeState } =
++    await import(pathToFileURL(join(playgroundOut, "permalink.mjs")).href);
++  const { normalizeLocale, withLocale } =
++    await import(pathToFileURL(join(playgroundOut, "locale.mjs")).href);
++  const vignette = findVignette("museum-attributions");
++  assert.ok(vignette, "the museum sample must be discoverable in the assembled gallery");
++
++  // Load the assembled assets through the gallery's real URL resolver. Node
++  // cannot fetch file URLs, so the transport reads the actual packaged files.
++  const state = await vignetteState(vignette, async (url) => new Response(await readFile(url)));
++  const canonical = new URL("../../../crates/purrdf/examples/museum/", import.meta.url);
++  assert.equal(state.input, await readFile(new URL("collection.ttl", canonical), "utf8"));
++  assert.equal(state.query, await readFile(new URL("attributions.rq", canonical), "utf8"));
++  assert.equal(state.activePane, "sparql");
++  assert.match(vignette.zhTitle, /博物馆藏品/u);
++  const legacy = await decodeState(await encodeState(state));
++  assert.equal(normalizeLocale(legacy.locale), "en");
++  const restored = await decodeState(await encodeState(withLocale(state, "zh-Hans")));
++  assert.equal(normalizeLocale(restored.locale), "zh-Hans");
++  const { locale, ...engineState } = restored;
++  assert.deepEqual(engineState, legacy);
++  assert.deepEqual(engineState, state, "the actual permalink codec must preserve the UTF-8 state");
++  const asset = async (url) => new Response(await readFile(url));
++  assert.equal(await matchesBundledMuseumQuery(restored, asset), true);
++  assert.equal(await matchesBundledMuseumQuery(legacy, asset), true);
++  for (const changed of [
++    { input: restored.input.replace("1723-09-08", "1724-09-08") },
++    { query: "ASK { }" },
++    { inputFormat: "ntriples" },
++    { activePane: "input" },
++  ]) {
++    assert.equal(await matchesBundledMuseumQuery({ ...restored, ...changed }, asset), false);
++  }
++
++  const expected = JSON.parse(await readFile(new URL("expected.srj", canonical), "utf8"));
++  const query = async (input) => {
++    await workerCall("parse", { text: input, format: restored.inputFormat });
++    const result = await workerCall("query", { sparql: restored.query });
++    assert.equal(result.kind, "srj");
++    return result.srj;
++  };
++  assert.deepEqual(await query(restored.input), expected);
++  const edited = restored.input.replace("1723-09-08", "1724-09-08");
++  assert.notEqual(edited, restored.input);
++  const editedExpected = structuredClone(expected);
++  editedExpected.results.bindings[1].date.value = "1724-09-08";
++  assert.deepEqual(await query(edited), editedExpected);
++
++  await assert.rejects(
++    vignetteState(vignette, async (url) =>
++      url.pathname.endsWith("attributions.rq")
++        ? new Response(null, { status: 404 })
++        : new Response(await readFile(url)),
++    ),
++    /could not load gallery fixture .*attributions\.rq \(HTTP 404\)/u,
++  );
++});
++
+ test("ASK query returns an SRJ boolean", () => {
+   const ds = Dataset.parse(PRELOADED, "turtle");
+   const srj = JSON.parse(
+diff --git docs/playground/smoke/licenses.smoke.test.mjs docs/playground/smoke/licenses.smoke.test.mjs
+index b3abc1d12..26672c528 100644
+--- docs/playground/smoke/licenses.smoke.test.mjs
++++ docs/playground/smoke/licenses.smoke.test.mjs
+@@ -31,7 +31,6 @@ async function install(change = () => {}) {
+   server.set("purrdf/licenses/runtime/inventory.json", JSON.stringify(runtime));
+   const stored = new Map();
+   const requested = [];
+-  let activated = false;
+   const events = {};
+   const key = (url) => new URL(typeof url === "string" ? url : url.url || url.href, scope).href;
+   const fetch = async (url) => {
+@@ -55,20 +54,18 @@ async function install(change = () => {}) {
+     self: {
+       registration: { scope }, location: { origin: "https://example.invalid" },
+       addEventListener: (name, handler) => { events[name] = handler; },
+-      skipWaiting: async () => { activated = true; },
+     },
+   });
+   let promise;
+   events.install({ waitUntil: (value) => { promise = value; } });
+   let error;
+   try { await promise; } catch (failure) { error = failure; }
+-  return { error, activated, stored, requested, events, cache };
++  return { error, stored, requested, events, cache };
+ }
+ 
+ test("offline installation retains both complete grants before the module", async () => {
+   const result = await install();
+   assert.equal(result.error, undefined);
+-  assert.equal(result.activated, true);
+   assert.ok(result.stored.has(scope + "purrdf/pkg/purrdf_wasm_bg.wasm"));
+   assert.ok(result.stored.has(scope + "purrdf/licenses/inventory.json"));
+   assert.ok(result.stored.has(scope + "purrdf/licenses/runtime/inventory.json"));
+@@ -95,7 +92,6 @@ for (const [name, change] of [
+   test(`offline installation refuses ${name}`, async () => {
+     const result = await install(change);
+     assert.ok(result.error, "must reject installation");
+-    assert.equal(result.activated, false);
+     assert.equal(result.stored.has(scope + "purrdf/pkg/purrdf_wasm_bg.wasm"), false);
+     assert.ok(result.requested.every((path) => !path.includes("outside") && !path.includes(".stage")));
+   });
+diff --git docs/playground/sw.mjs docs/playground/sw.mjs
+index 7a8132460..9593836fe 100644
+--- docs/playground/sw.mjs
++++ docs/playground/sw.mjs
+@@ -4,20 +4,25 @@
+ // package on install and serves cache-first, so the console runs fully offline
+ // after the first load. There is no server-side evaluation to fall back to.
+ 
+-const CACHE = "purrdf-console-v2";
++const CACHE = "purrdf-console-v5";
+ 
+ const SHELL = [
+   "./",
+   "./index.html",
+   "./app.mjs",
++  "./locale.mjs",
+   "./engine.worker.mjs",
+   "./sarif.mjs",
+   "./style.css",
+   "./manifest.webmanifest",
+   "./examples/gallery.mjs",
++  "./examples/museum/collection.ttl",
++  "./examples/museum/attributions.rq",
++  "./permalink.mjs",
+   "./purrdf/index.mjs",
+   "./purrdf/package.json",
+   "./purrdf/build-compiler.txt",
++  "./purrdf/pkg/purrdf_bytes.mjs",
+   "./purrdf/pkg/purrdf_jspi.mjs",
+   "./purrdf/pkg/purrdf_wasm.js",
+   "./purrdf/pkg/purrdf_wasm_bg.wasm",
+@@ -92,17 +97,16 @@ self.addEventListener("install", (event) => {
+       await cache.put(compilerURL, compiler);
+       for (const [url, response] of notices) await cache.put(url, response);
+       await cache.addAll(SHELL);
+-      await self.skipWaiting();
+     })(),
+   );
+ });
+ 
+ self.addEventListener("activate", (event) => {
++  // Let existing pages finish under their own shell before retiring its cache.
+   event.waitUntil(
+     (async () => {
+       const keys = await caches.keys();
+       await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
+-      await self.clients.claim();
+     })(),
+   );
+ });
+diff --git helpers-ledger.toml helpers-ledger.toml
+index 21d0461d5..48c3a8bbd 100644
+--- helpers-ledger.toml
++++ helpers-ledger.toml
+@@ -272,9 +272,9 @@ reason = "An artifact identity digest is its own kind, compared only with anothe
+ 
+ [[job]]
+ id = "blake3"
+-summary = "BLAKE3 hashing, keyed hashing, key derivation and extendable output, one-shot and streaming"
++summary = "BLAKE3 hashing, keyed hashing, key derivation and extendable output, one-shot, batched and streaming"
+ home = "purrdf_hash::blake3::hash"
+-entry_points = ["purrdf_hash::blake3::Streaming", "purrdf_hash::blake3::Hash", "purrdf_hash::blake3::OutputReader", "purrdf_hash::blake3::keyed_hash", "purrdf_hash::blake3::derive_key", "purrdf_hash::blake3::hash_xof", "purrdf_hash::blake3::keyed_hash_xof", "purrdf_hash::blake3::derive_key_xof"]
++entry_points = ["purrdf_hash::blake3::Streaming", "purrdf_hash::blake3::Hash", "purrdf_hash::blake3::OutputReader", "purrdf_hash::blake3::keyed_hash", "purrdf_hash::blake3::derive_key", "purrdf_hash::blake3::hash_xof", "purrdf_hash::blake3::keyed_hash_xof", "purrdf_hash::blake3::derive_key_xof", "purrdf_hash::blake3::hash_batch", "purrdf_hash::blake3::keyed_hash_batch", "purrdf_hash::blake3::DeriveKeyContext"]
+ spec = "the BLAKE3 specification (O'Connor, Aumasson, Neves, Wilcox-O'Hearn), all three modes and extendable output, sections 2.1-2.6"
+ vectors = [
+     "crates/hash-conformance/tests/vectors/blake3_differential_vectors.txt",
+diff --git scripts/check-test-shards.py scripts/check-test-shards.py
+index 8693ca914..eafea3e2a 100755
+--- scripts/check-test-shards.py
++++ scripts/check-test-shards.py
+@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
+ SPEC = importlib.util.spec_from_file_location("test_shards", ROOT / "scripts/test-shards.py")
+ SHARDS = importlib.util.module_from_spec(SPEC)
+ SPEC.loader.exec_module(SHARDS)
+-TEST_EXAMPLES = ("graphql_oracle_fixture", "typescript_oracle_fixture", "text_relevance")
++TEST_EXAMPLES = ("graphql_oracle_fixture", "typescript_oracle_fixture", "text_relevance", "museum_attributions")
+ 
+ 
+ def wiring_problems(make: str, workflow: str) -> list[str]:
+diff --git scripts/package-licenses.py scripts/package-licenses.py
+index 0c1e38810..6bcd24b51 100755
+--- scripts/package-licenses.py
++++ scripts/package-licenses.py
+@@ -39,6 +39,14 @@ FIRST_PARTY = "MIT OR Apache-2.0 OR MulanPSL-2.0"
+ FIRST_TEXTS = ("LICENSE-MIT", "LICENSE-APACHE", "LICENSE-MULAN")
+ LEGAL_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT", "AUTHORS")
+ IGNORED_PARTS = {"tests", "examples", "benches", "testdata", ".github"}
++PLAYGROUND_SHELL = {
++    **{name: "docs/playground/" + name for name in (
++        "index.html", "app.mjs", "engine.worker.mjs", "permalink.mjs", "sarif.mjs",
++        "style.css", "sw.mjs", "locale.mjs", "manifest.webmanifest", "examples/gallery.mjs",
++    )},
++    **{"examples/museum/" + name: "crates/purrdf/examples/museum/" + name
++       for name in ("collection.ttl", "attributions.rq")},
++}
+ COMPILER_ENV = (
+     "RUSTC",
+     "RUSTC_WRAPPER",
+@@ -728,6 +736,7 @@ def audit_directory(
+     code = ["package.json", "index.mjs"] + [
+         "pkg/" + name
+         for name in (
++            "purrdf_bytes.mjs",
+             "purrdf_jspi.mjs",
+             "purrdf_wasm.js",
+             "purrdf_wasm.d.ts",
+@@ -744,19 +753,9 @@ def audit_directory(
+             )
+         payload_hashes[name] = digest(source)
+     shell_root = relative.parent
+-    shell = ROOT / "docs/playground"
+-    for name in (
+-        "index.html",
+-        "app.mjs",
+-        "engine.worker.mjs",
+-        "sarif.mjs",
+-        "style.css",
+-        "sw.mjs",
+-        "manifest.webmanifest",
+-        "examples/gallery.mjs",
+-    ):
++    for name, source_path in PLAYGROUND_SHELL.items():
+         member = (shell_root / name).as_posix()
+-        source = (shell / name).read_bytes()
++        source = (ROOT / source_path).read_bytes()
+         if contents.get(member) != source:
+             raise ValueError(f"{path}: missing/stale assembled shell input {member}")
+         payload_hashes[member] = digest(source)
+@@ -1113,6 +1112,7 @@ def directory_self_test() -> None:
+         code = {
+             "package.json": b'{"name":"@blackcatinformatics/purrdf","version":"3.0.0","license":"MIT OR Apache-2.0 OR MulanPSL-2.0"}',
+             "index.mjs": b"fixture sdk",
++            "pkg/purrdf_bytes.mjs": b"fixture byte owner",
+             "pkg/purrdf_jspi.mjs": b"fixture jspi",
+             "pkg/purrdf_wasm.js": b"fixture glue",
+             "pkg/purrdf_wasm.d.ts": b"fixture types",
+@@ -1124,19 +1124,8 @@ def directory_self_test() -> None:
+             destination = npm / name
+             destination.parent.mkdir(parents=True, exist_ok=True)
+             destination.write_bytes(value)
+-        shell = source / "docs/playground"
+-        shell.mkdir(parents=True)
+-        for name in (
+-            "index.html",
+-            "app.mjs",
+-            "engine.worker.mjs",
+-            "sarif.mjs",
+-            "style.css",
+-            "sw.mjs",
+-            "manifest.webmanifest",
+-            "examples/gallery.mjs",
+-        ):
+-            destination = shell / name
++        for name, source_path in PLAYGROUND_SHELL.items():
++            destination = source / source_path
+             destination.parent.mkdir(parents=True, exist_ok=True)
+             destination.write_bytes(b"shell fixture " + name.encode())
+             payload[name] = destination.read_bytes()
+@@ -1191,6 +1180,7 @@ def directory_self_test() -> None:
+                     ("purrdf/build-compiler.txt", b"other compiler"),
+                     ("purrdf/pkg/purrdf_wasm_bg.wasm", b"stale wasm"),
+                     ("app.mjs", b"stale shell"),
++                    ("examples/museum/collection.ttl", None),
+                     (".stage/private.txt", b"private"),
+                 )
+             ):
+diff --git scripts/recover-python-release.sh scripts/recover-python-release.sh
+new file mode 100644
+index 000000000..f55f7f0ba
+--- /dev/null
++++ scripts/recover-python-release.sh
+@@ -0,0 +1,207 @@
++#!/usr/bin/env bash
++# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++set -euo pipefail
++export LC_ALL=C
++umask 077
++unset UNZIP UNZIPOPT ZIPINFO ZIPINFOOPT
++
++fail() {
++    printf 'Recovery refused: %s\n' "$*" >&2
++    exit 1
++}
++
++repo=Blackcat-Informatics/purrdf
++repo_id=1286258226
++run=45490315518
++revision=f0e7e08e144def22fb492cc21ada46d1e2bdb649
++ref=refs/heads/main
++caller=.github/workflows/release-pypi.yaml
++signer=.github/workflows/qualify-python-release.yaml
++tag=py-v5.0.1
++commit=6e63988e44a1f7a45c9803199e2a37415f85d41f
++receipt_digest=20437622d3c781df72dcf42b5cb1cf3ce1c799c3682614c6cc4be324ebfe6bf5
++native_id=14970683497
++shadow_id=14970234094
++evidence_id=14969593240
++
++regular() {
++    [[ -f $1 && ! -L $1 ]] || fail "not a regular file: $1"
++}
++
++check_attempt() {
++    regular "$metadata/attempt.json"
++    jq -e --argjson run "$run" --argjson repo "$repo_id" --arg sha "$revision" \
++        --arg caller "$caller" --arg signer "$repo/$signer@$revision" --arg ref "$ref" '
++        .id == $run and .run_attempt == 1 and
++        .repository.id == $repo and .head_repository.id == $repo and
++        .path == $caller and .head_branch == "main" and .head_sha == $sha and
++        .event == "workflow_dispatch" and .status == "completed" and
++        .conclusion == "success" and .referenced_workflows == [{path:$signer, sha:$sha, ref:$ref}]
++    ' "$metadata/attempt.json" >/dev/null || fail 'foreign or unsuccessful qualification attempt'
++}
++
++check_artifact() {
++    local id=$1 name=$2 digest=$3 size=$4
++    regular "$metadata/$id.json"
++    jq -e --argjson id "$id" --arg name "$name" --arg digest "sha256:$digest" \
++        --argjson size "$size" --arg sha "$revision" \
++        --argjson repo "$repo_id" --argjson run "$run" \
++        --arg url "https://api.github.com/repos/$repo/actions/artifacts/$id/zip" '
++        .id == $id and .name == $name and .digest == $digest and .size_in_bytes == $size and
++        .expired == false and .archive_download_url == $url and
++        .workflow_run == {id:$run, repository_id:$repo, head_repository_id:$repo,
++                          head_branch:"main", head_sha:$sha}
++    ' "$metadata/$id.json" >/dev/null || fail "foreign, missing or expired artifact metadata: $id"
++}
++
++fetch_artifact() {
++    local id=$1 name=$2 digest=$3 size=$4 actual
++    local endpoint="repos/$repo/actions/artifacts/$id"
++    gh api "$endpoint" > "$metadata/$id.json"
++    check_artifact "$id" "$name" "$digest" "$size"
++    gh api "$endpoint/zip" > "$archives/$id.zip"
++    read -r actual _ < <(sha256sum -- "$archives/$id.zip")
++    [[ $actual == "$digest" ]] || fail "original ZIP digest differs: $id"
++}
++
++authenticate_receipt() {
++    gh attestation verify "$1" --repo "$repo" \
++        --signer-workflow "$repo/$signer" --source-ref "$ref" \
++        --source-digest "$revision" --signer-digest "$revision" \
++        --deny-self-hosted-runners --format json > "$verified"
++}
++
++check_members() {
++    local archive=$1 summary list lengths entry raw_size raw_tail
++    shift
++    summary=$(zipinfo -l -T "$archive") || fail "invalid ZIP: $archive"
++    list=$(zipinfo -1 "$archive") || fail "cannot enumerate ZIP: $archive"
++    # The long listing must contain just a header, its declared number of
++    # regular member rows and a footer. Use the short listing for exact names.
++    awk -v count="$#" '
++        NR == 1 { if ($0 !~ /^Archive: /) exit 1; next }
++        NR == 2 { if ($NF != count || $0 !~ /number of entries:/) exit 1; next }
++        NR <= count + 2 { if ($1 !~ /^-[rwxstST-]{9}$/ || NF != 9) exit 1; next }
++        NR == count + 3 { if ($1 != count || $2 != "files,") exit 1; next }
++        { exit 1 }
++        END { if (NR != count + 3) exit 1 }
++    ' <<< "$summary" || fail "ZIP must contain exactly $# regular members: $archive"
++    diff -q <(printf '%s\n' "$@" | sort) <(sort <<< "$list") >/dev/null ||
++        fail "ZIP member names are not the exact approved set: $archive"
++    # Compare each central-directory filename length as well as the display
++    # name so a truncated filename cannot masquerade as an approved member.
++    lengths=$(zipinfo -v "$archive" | awk '$1 == "length" && $3 == "filename:" { print $4 }') ||
++        fail "cannot read ZIP filename lengths: $archive"
++    while IFS= read -r entry && IFS=' ' read -r raw_size raw_tail <&3; do
++        [[ $raw_size == "${#entry}" && -z $raw_tail ]] ||
++            fail "ZIP filename is not its approved ASCII spelling: $archive"
++    done <<< "$list" 3<<< "$lengths"
++    [[ $(wc -l <<< "$lengths") -eq $# ]] || fail "wrong ZIP filename census: $archive"
++}
++
++extract_members() {
++    local archive=$1 destination=$2 member
++    shift 2
++    for member; do
++        unzip -p "$archive" "$member" > "$destination/$member" ||
++            fail "cannot read approved member $member"
++    done
++}
++
++validate_receipt() {
++    local directory=$1 digest
++    read -r digest _ < <(sha256sum -- "$directory/release-source.json")
++    [[ $digest == "$receipt_digest" ]] || fail 'release receipt bytes differ'
++    jq -e --arg repo "https://github.com/$repo" --arg sha "$revision" --arg ref "$ref" \
++        --arg caller "$caller" --arg signer "$signer" --arg invocation "$run/attempts/1" \
++        --arg digest "$digest" '
++        any(.[]; .verificationResult as $r | $r.signature.certificate as $c
++            | $c.runInvocationURI == ($repo + "/actions/runs/" + $invocation)
++              and $c.buildTrigger == "workflow_dispatch" and $c.runnerEnvironment == "github-hosted"
++              and $c.sourceRepositoryURI == $repo and $c.sourceRepositoryRef == $ref
++              and $c.sourceRepositoryDigest == $sha and $c.buildConfigDigest == $sha
++              and $c.buildSignerDigest == $sha
++              and $c.buildConfigURI == ($repo + "/" + $caller + "@" + $ref)
++              and $c.buildSignerURI == ($repo + "/" + $signer + "@" + $ref)
++              and $r.statement.predicateType == "https://slsa.dev/provenance/v1"
++              and $r.statement.subject == [{name:"release-source.json", digest:{sha256:$digest}}])
++    ' "$verified" >/dev/null || fail 'verified attestation does not bind the approved attempt and receipt'
++    jq -e --arg tag "$tag" --arg sha "$commit" --rawfile checksums "$directory/release.sha256" '
++        .tag == $tag and .commit == $sha and .checksums == $checksums
++    ' "$directory/release-source.json" >/dev/null || fail 'release tag, commit or checksum manifest differs'
++}
++
++verify_bundle() {
++    local output=$1 scratch platform platforms original row
++    local native=(purrdf-5.0.1.tar.gz)
++    local shadow=(purrdf_rdflib-5.0.1-py3-none-any.whl purrdf_rdflib-5.0.1.tar.gz)
++    local evidence=(release-source.json release.sha256)
++    local baseline="$PWD/.github/python-backfill-5.0.1.json"
++    jq -e --arg tag "$tag" --arg commit "$commit" '
++        .tag == $tag and .commit == $commit and
++        (.purrdf | keys == ["purrdf-5.0.1-cp313-abi3-manylinux_2_34_x86_64.whl","purrdf-5.0.1.tar.gz"]) and
++        (."purrdf-rdflib" | keys == ["purrdf_rdflib-5.0.1-py3-none-any.whl","purrdf_rdflib-5.0.1.tar.gz"]) and
++        all((.purrdf[], ."purrdf-rdflib"[]); type == "string" and test("^[0-9a-f]{64}$"))
++    ' "$baseline" >/dev/null || fail 'release baseline is not the approved tag and commit'
++    platforms=$(jq -er '
++        [.include[].platform] as $p
++        | if ($p | length) != 8 or ($p | unique | length) != 8
++            or any($p[]; type != "string" or (test("^[A-Za-z0-9_]+$") | not))
++          then error("invalid or duplicate wheel platform") else $p[] end
++    ' .github/python-wheel-targets.json) || fail 'approved wheel matrix is invalid'
++    while IFS= read -r platform; do
++        native+=("purrdf-5.0.1-cp313-abi3-$platform.whl")
++    done <<< "$platforms"
++    check_members "$archives/$native_id.zip" "${native[@]}"
++    check_members "$archives/$shadow_id.zip" "${shadow[@]}"
++    check_members "$archives/$evidence_id.zip" "${evidence[@]}"
++    scratch=$(mktemp -d -- "$(dirname -- "$output")/.pypi-recovery.XXXXXX")
++    mkdir -- "$scratch/evidence" "$scratch/release-dist" "$scratch/release-shadow"
++    extract_members "$archives/$evidence_id.zip" "$scratch/evidence" "${evidence[@]}"
++    authenticate_receipt "$scratch/evidence/release-source.json"
++    validate_receipt "$scratch/evidence"
++    extract_members "$archives/$native_id.zip" "$scratch/release-dist" "${native[@]}"
++    extract_members "$archives/$shadow_id.zip" "$scratch/release-shadow" "${shadow[@]}"
++    (
++        cd "$scratch"
++        sha256sum -- release-dist/* release-shadow/* > actual.sha256
++        cmp -s -- actual.sha256 evidence/release.sha256 || fail 'distribution digest census differs'
++        original=$(jq -er '
++            (.purrdf | to_entries[] | "\(.value)  release-dist/\(.key)"),
++            (."purrdf-rdflib" | to_entries[] | "\(.value)  release-shadow/\(.key)")
++        ' "$baseline")
++        while IFS= read -r row; do
++            grep -Fxq -- "$row" actual.sha256 || fail 'approved distribution differs from original baseline'
++        done <<< "$original"
++    )
++    mv -T -- "$scratch" "$output"
++    printf 'Verified approved attempt %s/1, three artifact IDs and all 11 distribution paths and digests.\n' "$run"
++}
++
++main() {
++    [[ $# == 1 && $1 == /* ]] || fail 'expected an absolute new output directory'
++    [[ ! -e $1 && ! -L $1 ]] || fail 'verified output must not already exist'
++    [[ ${GITHUB_REPOSITORY:-} == "$repo" && ${GITHUB_EVENT_NAME:-} == workflow_dispatch &&
++        ${GITHUB_REF:-} == "$ref" && ${GITHUB_REF_PROTECTED:-} == true ]] ||
++        fail 'recovery requires a dispatch from protected main'
++    local work tags remote_commit tag_ref="refs/tags/$tag"
++    tags=$(git ls-remote --exit-code origin "$tag_ref" "$tag_ref^{}")
++    remote_commit=$(awk -v ref="$tag_ref" '
++        $2 == ref { tag=$1 }
++        $2 == ref "^{}" { peeled=$1 }
++        END { print peeled ? peeled : tag }
++    ' <<< "$tags")
++    [[ $remote_commit == "$commit" ]] || fail 'remote release tag no longer points to the approved source'
++    work=$(mktemp -d -- "$(dirname -- "$1")/.pypi-recovery-input.XXXXXX")
++    local metadata="$work/metadata" archives="$work/archives" verified="$work/verified-attestation.json"
++    mkdir -- "$metadata" "$archives"
++    gh api "repos/$repo/actions/runs/$run/attempts/1" > "$metadata/attempt.json"
++    check_attempt
++    fetch_artifact "$native_id" dist-pypi-native-release af67e00aec5387ffb861171698d343794c3d746d25d70ca76d0fa8c1c19600ff 283662749
++    fetch_artifact "$shadow_id" dist-pypi-shadow-release 5a3fac379cfa2b15a96e5b5e8f7bec05171842adeee5e10963984d43eb1d24ab 35399
++    fetch_artifact "$evidence_id" evidence-pypi-release 70d7bc96f4ba16ed5b062c3e39569ab93217331985cba71db58eae2436d7ebd2 1489
++    verify_bundle "$1"
++}
++
++main "$@"

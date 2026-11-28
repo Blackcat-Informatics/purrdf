@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1365-strict-lints-deny-levels-in-the",
+  "branch": "paudley/1365-strict-lints-deny-levels-in-the",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "ac6b9eefabf7d73ac10f5b663ff5bfd3afc323b4",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1365-strict-lints-deny-levels-in-the/.stage/strict-lints-deny-levels-in-the/sync/20261128T001530-cc599eff0ed14b71a871d4f7ab6ccfb6",
+  "conflicts": [],
+  "status": "completed",
+  "base": "efa0747e2d85f50c2db20ed93f8abca11a06b155",
+  "merge_bases": [
+    "52645a8e11c59a4c5f33dd586344fc13fe5b7bd2"
+  ],
+  "merge_index": "79249a64472299899ea643b3e06f9195b2b8fd157773c45ff949a58bbfa28126",
+  "candidate_tree": "901fdff0dd4cf61cfa6bcad5047eb11f9e1e6dec",
+  "candidate_patch": "candidate-240fc43aa4f44694b8dac6eb93d357cd.patch",
+  "stdout_log": "commit-240fc43aa4f44694b8dac6eb93d357cd.stdout.log",
+  "stderr_log": "commit-240fc43aa4f44694b8dac6eb93d357cd.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 132.05818518309388,
+  "commit": "579b7a7e2a74436674516b9374f5c0b287a64135",
+  "tree": "901fdff0dd4cf61cfa6bcad5047eb11f9e1e6dec",
+  "exit_code": 0
+}
