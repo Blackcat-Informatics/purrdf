@@ -346,7 +346,7 @@ impl Rational {
                 .mul_small(10)
                 .add(&Natural::from_u128(u128::from(byte - b'0')));
         }
-        let shift = exponent - i64::try_from(fraction.len()).ok()?;
+        let shift = exponent.checked_sub(i64::try_from(fraction.len()).ok()?)?;
         let power = u32::try_from(shift.unsigned_abs()).ok()?;
         Some(if shift >= 0 {
             Self::new(negative, digits.mul_pow10(power), Natural::from_u128(1))
@@ -963,6 +963,16 @@ mod tests {
             above
                 .round_to_scale_ties_toward_zero(18)
                 .value_eq(&Rational::from_decimal(5_722_045_898_438, 18))
+        );
+    }
+
+    #[test]
+    fn unrepresentable_decimal_exponent_is_refused_without_panicking() {
+        assert!(Rational::parse("1.0e-9223372036854775808").is_none());
+        assert!(Rational::parse("1e-9223372036854775808").is_none());
+        assert!(
+            Rational::parse("-1.0e-2")
+                .is_some_and(|value| value.value_eq(&Rational::from_decimal(-1, 2)))
         );
     }
 
