@@ -422,7 +422,7 @@ mod tests {
         assert!(
             refusal
                 .source()
-                .is_some_and(|cause| cause.is::<crate::cargo_fuzz_policy::Error>())
+                .is_some_and(<dyn std::error::Error>::is::<crate::cargo_fuzz_policy::Error>)
         );
         let captured = Capture::read(&refusal);
         assert_eq!(captured.code, "cargo-source-fuzz-graph");
